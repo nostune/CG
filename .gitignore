@@ -1,0 +1,69 @@
+# Build directories
+build/
+build2/
+Debug/
+Release/
+x64/
+.vs/
+
+# Visual Studio files
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.dir/
+
+# Compiled files
+*.exe
+*.dll
+*.so
+*.dylib
+*.obj
+*.o
+*.pdb
+*.ilk
+*.log
+
+# Assets (large files)
+assets/
+*.blend
+*.fbx
+*.mp3
+*.wav
+*.ogg
+*.png
+*.jpg
+*.jpeg
+*.tga
+*.dds
+*.exr
+
+# vcpkg (entire directory - users should install locally)
+vcpkg/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
