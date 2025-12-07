@@ -14,6 +14,25 @@ namespace resources {
     class Material;
 }
 
+// Physics configuration for loaded models
+struct PhysicsOptions {
+    bool addCollider = false;
+    bool addRigidBody = false;
+    
+    // Collider shape
+    enum class ColliderShape { Box, Sphere, ConvexMesh } shape = ColliderShape::Sphere;
+    DirectX::XMFLOAT3 boxExtent = { 1.0f, 1.0f, 1.0f };
+    float sphereRadius = 1.0f;
+    
+    // RigidBody properties
+    float mass = 1.0f;
+    bool useGravity = true;
+    bool isKinematic = false;
+    float staticFriction = 0.5f;
+    float dynamicFriction = 0.5f;
+    float restitution = 0.3f;
+};
+
 /**
  * Scene Asset Loader
  * 
@@ -41,9 +60,10 @@ public:
      * @param registry ECS registry
      * @param scene Scene to add entity to
      * @param objPath Path to .obj file
-     * @param texturePath Path to texture file (optional)
+     * @param texturePath Path to texture file (optional, will parse from MTL if empty)
      * @param position World position
      * @param scale Scale factor
+     * @param physicsOpts Physics configuration (nullptr = no physics)
      * @return Entity ID
      */
     static entt::entity LoadModelAsEntity(
@@ -51,9 +71,10 @@ public:
         std::shared_ptr<Scene> scene,
         ID3D11Device* device,
         const std::string& objPath,
-        const std::string& texturePath,
+        const std::string& texturePath = "",
         const DirectX::XMFLOAT3& position = {0, 0, 0},
-        const DirectX::XMFLOAT3& scale = {1, 1, 1}
+        const DirectX::XMFLOAT3& scale = {1, 1, 1},
+        const PhysicsOptions* physicsOpts = nullptr
     );
 
     /**
@@ -98,6 +119,15 @@ public:
     static std::shared_ptr<resources::Material> CreateMaterialResource(
         ID3D11Device* device,
         const std::string& texturePath
+    );
+
+    /**
+     * Parse MTL file to extract diffuse texture path
+     * @param mtlPath Path to .mtl file
+     * @return Path to diffuse texture (map_Kd), or empty string if not found
+     */
+    static std::string ParseMTLFile(
+        const std::string& mtlPath
     );
 };
 

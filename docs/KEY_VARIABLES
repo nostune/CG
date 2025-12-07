@@ -1,0 +1,182 @@
+### Transform 相关
+| 变量 | 类型 | 含义 | 范围 |
+|------|------|------|------|
+| `position` | XMFLOAT3 | 世界坐标 | (-∞, ∞) |
+| `rotation` | XMFLOAT4 | 四元数旋转 | 单位四元数 |
+| `scale` | XMFLOAT3 | 缩放 | (0, ∞) |
+
+### Render Priority 相关
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `sortKey` | uint32_t | 排序键 | 0-65535 |
+| `renderPass` | int | 渲染通道 | 0=Opaque, 1=Transparent |
+| `distanceToCamera` | float | 到相机距离 | 自动计算 |
+| `lodLevel` | int | LOD级别 | 0=最高, 1=中, 2=低 |
+| `visible` | bool | 是否可见 | true/false |
+| `castShadow` | bool | 投射阴影 | true/false |
+| `receiveShadow` | bool | 接收阴影 | true/false |
+
+### Camera 相关
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `position` | XMFLOAT3 | 相机位置 | 角色位置+眼高 |
+| `target` | XMFLOAT3 | 看向位置 | 根据yaw/pitch计算 |
+| `yaw` | float | 水平旋转角 | 0-2π (弧度) |
+| `pitch` | float | 俯仰角 | -π/2 ~ π/2 |
+| `fov` | float | 视野角度 | 60-90 (度) |
+| `aspectRatio` | float | 宽高比 | 16/9 = 1.778 |
+| `nearPlane` | float | 近裁剪面 | 0.1 |
+| `farPlane` | float | 远裁剪面 | 1000.0 |
+| `lookSensitivity` | float | 鼠标灵敏度 | 0.001-0.01 |
+
+### Character Controller 相关
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `moveSpeed` | float | 移动速度 | 5.0 m/s |
+| `jumpSpeed` | float | 跳跃初速度 | 8.0 m/s |
+| `gravity` | float | 重力加速度 | -20.0 m/s² |
+| `verticalVelocity` | float | 当前垂直速度 | 动态计算 |
+| `isGrounded` | bool | 是否在地面 | 碰撞检测 |
+| `forwardInput` | float | 前后输入 | -1 ~ 1 (W/S) |
+| `rightInput` | float | 左右输入 | -1 ~ 1 (A/D) |
+
+### PhysX 相关
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `controller->height` | float | 胶囊高度 | 1.6m |
+| `controller->radius` | float | 胶囊半径 | 0.4m |
+| `stepOffset` | float | 可爬台阶高度 | 0.5m |
+| `slopeLimit` | float | 最大坡度 | cos(45°) = 0.707 |
+| `minDist` | float | 最小移动距离 | 0.0001 (更流畅) |
+| `material->staticFriction` | float | 静摩擦系数 | 0.8 |
+| `material->dynamicFriction` | float | 动摩擦系数 | 0.6 |
+| `material->restitution` | float | 弹性系数 | 0.1 |
+
+### Input 相关
+| 变量 | 类型 | 含义 |
+|------|------|------|
+| `moveInput` | XMFLOAT2 | WASD输入 (x=左右, y=前后) |
+| `lookInput` | XMFLOAT2 | 鼠标偏移 (x=水平, y=垂直) |
+| `mouseLookEnabled` | bool | 鼠标控制启用 |
+| `jumpPressed` | bool | 空格键按下 |
+| `sprintHeld` | bool | Shift键按住 |
+
+### Mesh & Material 相关
+| 变量 | 类型 | 含义 |
+|------|------|------|
+| `vertexBuffer` | ID3D11Buffer* | GPU顶点缓冲 |
+| `indexBuffer` | ID3D11Buffer* | GPU索引缓冲 |
+| `albedoTexture` | string | 漫反射贴图路径 |
+| `normalTexture` | string | 法线贴图路径 |
+| `shaderProgram` | void* | 临时存储纹理SRV |
+| `metallic` | float | 金属度 (PBR) 0-1 |
+| `roughness` | float | 粗糙度 (PBR) 0-1 |
+
+---
+
+### 1. 查看实体数量
+```cpp
+// 在任何System的Update中
+size_t entityCount = registry.size();
+DebugManager::Log("Debug", "Total entities: " + std::to_string(entityCount));
+```
+
+### 2. 检查特定组件的实体
+```cpp
+auto view = registry.view<MeshComponent>();
+DebugManager::Log("Debug", "Entities with MeshComponent: " + std::to_string(view.size()));
+```
+
+### 3. 调试渲染队列
+```cpp
+// RenderSystem.cpp 已有
+// 每60帧输出一次渲染顺序
+[RenderSystem] Opaque Queue:
+  [0] Entity ID=0, sortKey=1000, distance=5.080354
+  [1] Entity ID=1, sortKey=1000, distance=11.503248
+```
+
+### 4. 调试角色移动
+```cpp
+// PlayerSystem.cpp UpdatePlayerMovement()
+DebugManager::Log("Player", 
+    "Pos: (" + std::to_string(pos.x) + ", " + 
+               std::to_string(pos.y) + ", " + 
+               std::to_string(pos.z) + ")");
+DebugManager::Log("Player", "Grounded: " + std::to_string(isGrounded));
+```
+
+### 5. 性能分析
+```cpp
+// 在Update开头
+auto startTime = std::chrono::high_resolution_clock::now();
+
+// 在Update结尾
+auto endTime = std::chrono::high_resolution_clock::now();
+float ms = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+DebugManager::Log("Perf", "RenderSystem: " + std::to_string(ms) + "ms");
+```
+
+### 6. 常见问题排查
+
+| 问题 | 可能原因 | 检查 |
+|------|----------|------|
+| 物体不显示 | 没有MeshComponent/RenderableComponent | registry.view<MeshComponent>().size() |
+| 物体不显示 | visible=false | priority.visible |
+| 物体不显示 | 不在相机视野内 | distanceToCamera |
+| 物体不显示 | 没有GPU缓冲 | mesh->vertexBuffer != nullptr |
+| 纹理不显示 | 纹理路径错误 | TextureLoader加载失败 |
+| 移动卡顿 | minDist太大 | 改为0.0001 |
+| 鼠标失控 | 没有重置到中心 | SetCursorPos每帧调用 |
+| 掉出地面 | 没有碰撞体 | PxRigidStatic创建 |
+
+---
+
+## 总结
+
+### ECS设计优势
+✅ **数据驱动**: 所有物体都是Entity+Components  
+✅ **易扩展**: 新增Component不影响现有代码  
+✅ **性能优化**: 缓存友好的遍历方式  
+✅ **解耦**: System独立处理各自逻辑  
+
+### 加载大场景的正确姿势
+1. **小场景** (测试): 直接在main.cpp调用LoadModelAsEntity
+2. **中等场景** (关卡): 使用JSON配置文件 + LoadSceneFromFile
+3. **大场景** (开放世界): 资源共享实例化 + 空间分区 + 异步加载
+
+### 关键设计模式
+- **Singleton**: Engine, InputManager, PhysXManager
+- **Component Pattern**: ECS架构核心
+- **Resource Manager**: 共享Mesh和Material
+- **Command Pattern**: PlayerInput → CharacterController
+
+---
+
+## 下一步开发建议
+
+1. **实现JSON场景加载器** (优先级: 高)
+   - 使用 nlohmann/json 库
+   - 实现 SceneAssetLoader::LoadSceneFromFile
+
+2. **添加资源管理器** (优先级: 高)
+   - 避免重复加载相同模型/纹理
+   - 引用计数管理生命周期
+
+3. **实现视锥剔除** (优先级: 中)
+   - 只渲染相机视野内的物体
+   - 提升大场景性能
+
+4. **添加LOD系统** (优先级: 中)
+   - 根据距离切换模型细节
+   - 减少顶点数量
+
+5. **异步资源加载** (优先级: 低)
+   - 后台线程加载模型
+   - 避免主线程卡顿
+
+---
+
+**文档版本**: v1.0  
+**最后更新**: 2025年12月3日  
+**作者**: OuterWilds ECS Team

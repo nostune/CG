@@ -396,7 +396,13 @@ void RenderSystem::DrawQueue(const LightweightRenderQueue& queue, entt::registry
             continue;
         }
         
-        // Check for MeshComponent (new system)
+        // ============================================
+        // MeshComponent Rendering (Textured Models)
+        // ============================================
+        // This is for models loaded via SceneAssetLoader (OBJ + textures)
+        // Uses shaders/textured.hlsl which supports albedo textures
+        // ============================================
+        
         auto* meshComp = registry.try_get<components::MeshComponent>(entity);
         if (meshComp && meshComp->mesh && meshComp->isVisible) {
             // Create GPU buffers if needed
@@ -411,9 +417,24 @@ void RenderSystem::DrawQueue(const LightweightRenderQueue& queue, entt::registry
             // Get world matrix
             DirectX::XMMATRIX worldMatrix = transform.GetWorldMatrix();
             
-            // TODO: Bind proper shader for textured mesh
-            // For now, we'll use a simple default shader
-            // In production, load shader from material or use a default textured shader
+            // ============================================
+            // CRITICAL: Load textured shader for models with textures
+            // ============================================
+            // - Static variable ensures shader is loaded only once
+            // - Uses "textured.vs/ps" which loads shaders/textured.hlsl
+            // - This shader has Texture2D and SamplerState for textures
+            // ============================================
+            static std::shared_ptr<resources::Shader> s_texturedShader = nullptr;
+            if (!s_texturedShader) {
+                s_texturedShader = std::make_shared<resources::Shader>();
+                if (!s_texturedShader->LoadFromFile(device, "textured.vs", "textured.ps")) {
+                    DebugManager::GetInstance().Log("DrawQueue", "Failed to load textured shader");
+                    continue;
+                }
+            }
+            
+            // Bind textured shader (enables texture sampling in pixel shader)
+            s_texturedShader->Bind(context);
             
             // Update per-object constant buffer
             if (s_perObjectCB) {
@@ -441,12 +462,18 @@ void RenderSystem::DrawQueue(const LightweightRenderQueue& queue, entt::registry
             // Set topology
             context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             
-            // Bind texture if available
+            // ============================================
+            // TEXTURE BINDING
+            // ============================================
+            // material->shaderProgram temporarily stores the texture SRV
+            // (In production, use a ResourceManager to avoid duplicates)
+            // Binds to register(t0) in HLSL shader
+            // ============================================
             if (meshComp->material && meshComp->material->shaderProgram) {
                 auto textureSRV = static_cast<ID3D11ShaderResourceView*>(meshComp->material->shaderProgram);
-                context->PSSetShaderResources(0, 1, &textureSRV);
+                context->PSSetShaderResources(0, 1, &textureSRV);  // Bind to t0
                 
-                // Set sampler state
+                // Set sampler state for texture filtering
                 static ID3D11SamplerState* s_samplerState = nullptr;
                 if (!s_samplerState) {
                     D3D11_SAMPLER_DESC samplerDesc = {};

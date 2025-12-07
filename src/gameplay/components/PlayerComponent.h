@@ -12,6 +12,7 @@ struct PlayerComponent : public Component {
     bool isGrounded = false;
     
     Entity cameraEntity = entt::null;
+    Entity visualModelEntity = entt::null;  // 玩家可视化模型实体（用于第三人称观察）
 };
 
 } // namespace outer_wilds

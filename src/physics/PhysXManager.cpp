@@ -26,7 +26,7 @@ bool PhysXManager::Initialize() {
 
     // Create scene
     physx::PxSceneDesc sceneDesc(m_Physics->getTolerancesScale());
-    sceneDesc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
+    sceneDesc.gravity = physx::PxVec3(0.0f, 0.0f, 0.0f);  // 禁用全局重力，使用自定义星球重力系统
     m_Dispatcher = physx::PxDefaultCpuDispatcherCreate(2);
     sceneDesc.cpuDispatcher = m_Dispatcher;
     sceneDesc.filterShader = physx::PxDefaultSimulationFilterShader;

@@ -1,0 +1,208 @@
+ // ========================================
+        // 星球重力测试场景 - 暂时禁用，逐行注释
+        // ========================================
+        // outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Planet Gravity Test Scene ===");
+        // 
+        // // 星球参数(简单明了)
+        // const float PLANET_SCALE = 10.0f;           // 星球缩放倍数
+        // const float PLANET_MODEL_RADIUS = 6.4f;     // 原始obj模型的实际半径(米) - 从OBJ顶点测量
+        // const float PLANET_ACTUAL_RADIUS = PLANET_SCALE * PLANET_MODEL_RADIUS;  // 实际半径 = 64米
+        //
+        // // 玩家胶囊体参数（保持与 PhysX 控制器一致）
+        // const float CONTROLLER_HEIGHT = 1.6f;
+        // const float CONTROLLER_RADIUS = 0.4f;
+        // const float CONTROLLER_CONTACT_OFFSET = 0.1f;
+        //
+        // // 玩家脚底距离星球中心 = 星球半径 + 胶囊半高 + 安全余量
+        // const float CAPSULE_HALF_HEIGHT = (CONTROLLER_HEIGHT * 0.5f) + CONTROLLER_RADIUS; // 半高(包含半径)
+        // const float PLAYER_SURFACE_PADDING = 0.5f;  // 额外抬离表面，避免初始嵌入
+        // const float PLAYER_START_HEIGHT = PLANET_ACTUAL_RADIUS + CAPSULE_HALF_HEIGHT + CONTROLLER_CONTACT_OFFSET + PLAYER_SURFACE_PADDING;
+        // 
+        // std::stringstream configLog;
+        // configLog << "Planet Config: Scale=" << PLANET_SCALE 
+        //           << ", Actual Radius=" << PLANET_ACTUAL_RADIUS 
+        //           << "m, Player Height=" << PLAYER_START_HEIGHT << "m";
+        // outer_wilds::DebugManager::GetInstance().Log("Main", configLog.str());));
+        // 
+        // // 创建星球物理配置
+        // outer_wilds::PhysicsOptions planetPhysics;
+        // planetPhysics.addCollider = true;
+        // planetPhysics.addRigidBody = true;
+        // planetPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
+        // planetPhysics.sphereRadius = PLANET_MODEL_RADIUS;  // 1.0米,会自动乘scale变成10米
+        // planetPhysics.mass = 0.0f;                         // 静态物体
+        // planetPhysics.useGravity = false;                  // 星球本身不受重力
+        // planetPhysics.isKinematic = true;
+        // planetPhysics.staticFriction = 0.8f;
+        // planetPhysics.dynamicFriction = 0.6f;
+        // planetPhysics.restitution = 0.2f;
+        //
+        // // 加载星球模型
+        // entt::entity planetEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+        //     scene->GetRegistry(),
+        //     scene,
+        //     engine.GetRenderSystem()->GetBackend()->GetDevice(),
+        //     "assets/BlendObj/planet1.obj",
+        //     "assets/Texture/plastered_stone_wall_diff_2k.jpg",
+        //     DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),           // 星球中心在原点
+        //     DirectX::XMFLOAT3(PLANET_SCALE, PLANET_SCALE, PLANET_SCALE),  // 缩放10倍
+        //     &planetPhysics
+        // );
+
+        if (planetEntity != entt::null) {
+            // 添加重力源组件
+            auto& gravitySource = scene->GetRegistry().emplace<outer_wilds::components::GravitySourceComponent>(planetEntity);
+            gravitySource.radius = PLANET_ACTUAL_RADIUS;        // 64米
+            gravitySource.surfaceGravity = 9.8f;
+            gravitySource.atmosphereHeight = 20.0f;              // 大气层20米
+            gravitySource.useRealisticGravity = false;
+            gravitySource.isActive = true;
+            
+            std::stringstream gravLog;
+            gravLog << "Planet gravity source: radius=" << gravitySource.radius 
+                    << "m, influence=" << gravitySource.GetInfluenceRadius() << "m";
+            outer_wilds::DebugManager::GetInstance().Log("Main", gravLog.str());
+            
+            // 验证物理Actor是否创建
+            auto* rigidBody = scene->GetRegistry().try_get<outer_wilds::RigidBodyComponent>(planetEntity);
+            if (rigidBody) {
+                if (rigidBody->physxActor) {
+                    outer_wilds::DebugManager::GetInstance().Log("Main", "Planet PhysX actor created successfully");
+                } else {
+                    outer_wilds::DebugManager::GetInstance().Log("Main", "Planet PhysX actor is NULL!");
+                }
+            } else {
+                outer_wilds::DebugManager::GetInstance().Log("Main", "Planet has no RigidBodyComponent!");
+            }
+            
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Planet created successfully at origin (0,0,0)");
+        } else {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to create planet!");
+        }
+
+        // ========================================
+        // 创建参考网格平面
+        // ========================================
+        auto gridEntity = scene->CreateEntity("grid_reference");
+        auto& gridTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(gridEntity);
+        gridTransform.position = {0.0f, 0.0f, 0.0f};
+        gridTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        gridTransform.scale = {1.0f, 1.0f, 1.0f};
+        
+        auto& gridMeshComponent = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(gridEntity);
+        gridMeshComponent.mesh = groundMesh;
+        gridMeshComponent.material = groundRenderMaterial;
+        gridMeshComponent.isVisible = true;
+        gridMeshComponent.castsShadows = false;
+        
+        auto& gridRenderPriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(gridEntity);
+        gridRenderPriority.renderPass = 0;
+        gridRenderPriority.sortKey = 50;
+        gridRenderPriority.lodLevel = 0;
+        
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Reference grid created");
+
+        // ========================================
+        // 创建玩家
+        // ========================================
+        outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Player ===");
+        
+        auto playerEntity = scene->CreateEntity("player");
+        auto& playerTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(playerEntity);
+        playerTransform.position = {0.0f, PLAYER_START_HEIGHT, 0.0f};  // 使用计算好的高度
+        playerTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        
+        std::stringstream playerLog;
+        playerLog << "Player spawn position: (0, " << PLAYER_START_HEIGHT << ", 0)\n"
+                  << "  - Planet radius: " << PLANET_ACTUAL_RADIUS << "m\n"
+                  << "  - Distance from center: " << PLAYER_START_HEIGHT << "m\n"
+                  << "  - Height above surface: " << (PLAYER_START_HEIGHT - PLANET_ACTUAL_RADIUS) << "m";
+        outer_wilds::DebugManager::GetInstance().Log("Main", playerLog.str());
+        
+        // Add player component
+        scene->GetRegistry().emplace<outer_wilds::PlayerComponent>(playerEntity);
+        
+        // === 添加重力影响组件（启用球面重力）===
+        auto& playerGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(playerEntity);
+        playerGravity.affectedByGravity = true;  // 启用球面重力
+        playerGravity.gravityScale = 1.0f;
+        
+        // === 添加玩家对齐组件（启用自动对齐）===
+        auto& playerAlignment = scene->GetRegistry().emplace<outer_wilds::components::PlayerAlignmentComponent>(playerEntity);
+        playerAlignment.autoAlign = true;  // 启用自动对齐到星球表面
+        playerAlignment.alignmentSpeed = 5.0f;
+        playerAlignment.lockRoll = true;
+        playerAlignment.preserveForward = true;
+        playerAlignment.alignmentDeadZone = 0.5f;
+        
+        // Create PhysX capsule character controller
+        physx::PxCapsuleControllerDesc controllerDesc;
+        controllerDesc.height = CONTROLLER_HEIGHT;
+        controllerDesc.radius = CONTROLLER_RADIUS;
+        controllerDesc.position = physx::PxExtendedVec3(playerTransform.position.x, playerTransform.position.y, playerTransform.position.z);
+        
+        std::stringstream ctrlLog;
+        ctrlLog << "Controller setup: height=" << CONTROLLER_HEIGHT 
+                << "m, radius=" << CONTROLLER_RADIUS 
+                << "m, spawn at (" << playerTransform.position.x << ", " 
+                << playerTransform.position.y << ", " << playerTransform.position.z << ")";
+        outer_wilds::DebugManager::GetInstance().Log("Main", ctrlLog.str());
+        
+        controllerDesc.material = groundPhysicsMaterial;
+        controllerDesc.stepOffset = 0.5f;      // 可以爬0.5米的台阶
+        controllerDesc.contactOffset = CONTROLLER_CONTACT_OFFSET;
+        controllerDesc.slopeLimit = cosf(DirectX::XM_PIDIV4); // 45度最大坡度
+        controllerDesc.climbingMode = physx::PxCapsuleClimbingMode::eEASY;
+        
+        physx::PxController* controller = physxManager.GetControllerManager()->createController(controllerDesc);
+        if (!controller) {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to create character controller!");
+            return 0;
+        }
+        
+        // 验证控制器实际位置
+        physx::PxExtendedVec3 actualPos = controller->getPosition();
+        std::stringstream verifyLog;
+        verifyLog << "Controller created! Actual position: (" 
+                  << (float)actualPos.x << ", " << (float)actualPos.y << ", " << (float)actualPos.z << ")";
+        outer_wilds::DebugManager::GetInstance().Log("Main", verifyLog.str());
+        
+        // Add character controller component
+        auto& characterController = scene->GetRegistry().emplace<outer_wilds::components::CharacterControllerComponent>(playerEntity);
+        characterController.controller = controller;
+        characterController.moveSpeed = 5.0f;
+        characterController.jumpSpeed = 8.0f;
+        characterController.gravity = -20.0f;
+        
+        // Add camera component (first-person view)
+        auto& playerCamera = scene->GetRegistry().emplace<outer_wilds::components::CameraComponent>(playerEntity);
+        playerCamera.isActive = true;
+        playerCamera.fov = 75.0f;
+        playerCamera.aspectRatio = 16.0f / 9.0f;
+        playerCamera.nearPlane = 0.1f;
+        playerCamera.farPlane = 1000.0f;
+        playerCamera.position = playerTransform.position;
+        playerCamera.target = {0.0f, PLAYER_START_HEIGHT, 1.0f};  // 向前看(Z+方向)
+        playerCamera.up = {0.0f, 1.0f, 0.0f};
+        playerCamera.yaw = 0.0f;
+        playerCamera.pitch = 0.0f;
+        playerCamera.moveSpeed = 5.0f;
+        playerCamera.lookSensitivity = 0.003f;
+        
+        // Add player input component
+        auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
+        playerInput.mouseLookEnabled = true;
+        
+        // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
+        */
+        
+        // ========================================
+        // 输出完整的启动日志
+        // ========================================
+        std::cout << "\n=== STARTUP LOGS ===" << std::endl;
+        outer_wilds::DebugManager::GetInstance().ForcePrint();
+        std::cout << "===================\n" << std::endl;
+        
+        engine.Run();
+    }

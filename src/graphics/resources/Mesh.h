@@ -12,6 +12,7 @@ struct Vertex {
     DirectX::XMFLOAT3 normal;
     DirectX::XMFLOAT2 texCoord;
     DirectX::XMFLOAT3 tangent;
+    DirectX::XMFLOAT4 color = {1.0f, 1.0f, 1.0f, 1.0f};  // 顶点颜色（来自MTL的Kd）
 };
 
 class Mesh {

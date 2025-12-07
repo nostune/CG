@@ -6,16 +6,24 @@
 #include "graphics/components/RenderableComponent.h"
 #include "graphics/components/RenderPriorityComponent.h"
 #include "graphics/components/CameraComponent.h"
+#include "graphics/components/FreeCameraComponent.h"
 #include "graphics/components/MeshComponent.h"
 #include "gameplay/components/PlayerInputComponent.h"
+#include "gameplay/components/PlayerComponent.h"
+#include "gameplay/components/PlayerAlignmentComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
+#include "physics/components/GravitySourceComponent.h"
+#include "physics/components/GravityAffectedComponent.h"
+#include "physics/components/RigidBodyComponent.h"
 #include "graphics/resources/Material.h"
 #include "graphics/resources/Shader.h"
+#include "graphics/resources/TextureLoader.h"
 #include "graphics/RenderSystem.h"
 #include "physics/PhysXManager.h"
 #include <PxPhysicsAPI.h>
 #include <Windows.h>
 #include <iostream>
+#include <sstream>
 
 // Function to create and redirect IO to a console
 void CreateDebugConsole() {
@@ -103,25 +111,11 @@ int main(int argc, char* argv[]) {
         // Get the default scene
         auto scene = engine.GetSceneManager()->GetActiveScene();
 
-        // Create a PhysX ground plane with friction
-        auto& physxManager = outer_wilds::PhysXManager::GetInstance();
-        physx::PxTransform planeTransform(physx::PxVec3(0.0f, 0.0f, 0.0f), physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 0.0f, 1.0f)));
-        physx::PxRigidStatic* groundPlane = physxManager.GetPhysics()->createRigidStatic(planeTransform);
-        
         // Create ground physics material with friction
+        auto& physxManager = outer_wilds::PhysXManager::GetInstance();
         physx::PxMaterial* groundPhysicsMaterial = physxManager.GetPhysics()->createMaterial(0.8f, 0.6f, 0.1f); // static, dynamic, restitution
-        physx::PxShape* planeShape = physxManager.GetPhysics()->createShape(physx::PxPlaneGeometry(), *groundPhysicsMaterial);
-        groundPlane->attachShape(*planeShape);
-        planeShape->release();
-        physxManager.GetScene()->addActor(*groundPlane);
         
-        // Create ECS entity for rendering the ground plane as a simple quad
-        auto ground = scene->CreateEntity("ground");
-        auto& groundTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(ground);
-        groundTransform.position = {0.0f, 0.0f, 0.0f}; // Ground at y=0
-        groundTransform.scale = {1.0f, 1.0f, 1.0f};
-
-        // Create a simple quad mesh for the ground plane
+        // Create a simple quad mesh for the ground plane (for rendering)
         auto groundMesh = std::make_shared<outer_wilds::resources::Mesh>();
         std::vector<outer_wilds::resources::Vertex> groundVertices;
         std::vector<uint32_t> groundIndices;
@@ -148,105 +142,259 @@ int main(int argc, char* argv[]) {
         groundRenderMaterial->ao = 1.0f;
         groundRenderMaterial->isTransparent = false;
         
-        // Create and load the grid shader
-        auto groundShader = std::make_shared<outer_wilds::resources::Shader>();
-        groundShader->LoadFromFile(engine.GetRenderSystem()->GetBackend()->GetDevice(), "grid.vs", "grid.ps");
+        // ============================================
+        // Load texture for ground plane
+        // ============================================
+        // NOTE: Even though ground uses RenderableComponent (old system),
+        // we can still apply textures if the shader supports it
+        // ============================================
+        ID3D11ShaderResourceView* groundTextureSRV = nullptr;
+        if (outer_wilds::resources::TextureLoader::LoadFromFile(
+                engine.GetRenderSystem()->GetBackend()->GetDevice(),
+                "assets/Texture/plastered_stone_wall_diff_2k.jpg",
+                &groundTextureSRV)) {
+            groundRenderMaterial->shaderProgram = groundTextureSRV;
+            groundRenderMaterial->albedoTexture = "assets/Texture/plastered_stone_wall_diff_2k.jpg";
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Ground texture loaded successfully!");
+        } else {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load ground texture");
+        }
         
-        auto& groundRenderable = scene->GetRegistry().emplace<outer_wilds::components::RenderableComponent>(ground);
-        groundRenderable.mesh = groundMesh;
-        groundRenderable.material = groundRenderMaterial;
-        groundRenderable.shader = groundShader;
+        // ========================================
+        // 地平面测试场景（暂时禁用）
+        // ========================================
+        // outer_wilds::DebugManager::GetInstance().Log("Main", "Creating ground plane test scene...");
+        // 
+        // // === 创建渲染用的地面实体（使用已创建的groundMesh）===
+        // auto groundEntity = scene->CreateEntity("ground_render");
+        // auto& groundEntityTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(groundEntity);
+        // groundEntityTransform.position = {0.0f, 0.0f, 0.0f};
+        // groundEntityTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        // groundEntityTransform.scale = {1.0f, 1.0f, 1.0f};  // groundMesh已经是100x100米
+        // 
+        // auto& groundMeshComponent = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(groundEntity);
+        // groundMeshComponent.mesh = groundMesh;
+        // groundMeshComponent.material = groundRenderMaterial;
+        // groundMeshComponent.isVisible = true;
+        // groundMeshComponent.castsShadows = false;
+        // 
+        // auto& groundRenderPriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(groundEntity);
+        // groundRenderPriority.renderPass = 0;  // Opaque pass
+        // groundRenderPriority.sortKey = 100;
+        // groundRenderPriority.lodLevel = 0;
+        // 
+        // // 创建PhysX静态地面碰撞体（Box而不是Plane，更好控制）
+        // physx::PxPhysics* physics = physxManager.GetPhysics();
+        // physx::PxShape* groundShape = physics->createShape(
+        //     physx::PxBoxGeometry(50.0f, 0.5f, 50.0f),  // 100x1x100米的盒子
+        //     *groundPhysicsMaterial,
+        //     true
+        // );
+        // 
+        // physx::PxTransform groundPose(physx::PxVec3(0.0f, -0.5f, 0.0f));  // 地面在Y=-0.5
+        // physx::PxRigidStatic* groundActor = physics->createRigidStatic(groundPose);
+        // groundActor->attachShape(*groundShape);
+        // groundShape->release();
+        // 
+        // physx::PxScene* pxScene = physxManager.GetScene();
+        // pxScene->addActor(*groundActor);
+        // 
+        // outer_wilds::DebugManager::GetInstance().Log("Main", "Ground plane created!");");
+        // 
+        // // ========================================
+        // // 创建玩家（地平面测试）
+        // // ========================================
+        // outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Player ===");
+        // 
+        // auto playerEntity = scene->CreateEntity("player");
+        // auto& playerTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(playerEntity);
+        // playerTransform.position = {0.0f, 2.0f, 0.0f};  // 地面上方2米
+        // playerTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        // 
+        // outer_wilds::DebugManager::GetInstance().Log("Main", "Player spawn at (0, 2, 0) - 2m above ground");
+        // 
+        // // Add player component
+        // scene->GetRegistry().emplace<outer_wilds::PlayerComponent>(playerEntity);
+        // 
+        // // 地平面测试不需要重力影响组件响组件
         
-        // 添加 RenderPriorityComponent（标签管理）
-        auto& groundPriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(ground);
-        groundPriority.sortKey = 1000;  // 地面的排序键
-        groundPriority.renderPass = 0;  // Opaque（不透明）
-        groundPriority.lodLevel = 0;    // 最高细节
-        groundPriority.visible = true;  // 默认可见
-        groundPriority.castShadow = false;  // 地面不投射阴影
-        groundPriority.receiveShadow = true;  // 地面接收阴影
+        // ========================================
+        // 星球重力测试场景
+        // ========================================
+        outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Planet Gravity Test Scene ===");
+        
+        // 星球参数(简单明了)
+        const float PLANET_SCALE = 10.0f;           // 星球缩放倍数
+        const float PLANET_MODEL_RADIUS = 6.4f;     // 原始obj模型的实际半径(米) - 从OBJ顶点测量
+        const float PLANET_ACTUAL_RADIUS = PLANET_SCALE * PLANET_MODEL_RADIUS;  // 实际半径 = 64米
 
-        // ========================================
-        // Load Blender Sphere Model with Texture
-        // ========================================
-        outer_wilds::DebugManager::GetInstance().Log("Main", "Loading sphere model from assets...");
+        // 玩家胶囊体参数（保持与 PhysX 控制器一致）
+        const float CONTROLLER_HEIGHT = 1.6f;
+        const float CONTROLLER_RADIUS = 0.4f;
+        const float CONTROLLER_CONTACT_OFFSET = 0.1f;
+
+        // 玩家脚底距离星球中心 = 星球半径 + 胶囊半高 + 安全余量
+        const float CAPSULE_HALF_HEIGHT = (CONTROLLER_HEIGHT * 0.5f) + CONTROLLER_RADIUS; // 半高(包含半径)
+        const float PLAYER_SURFACE_PADDING = 0.5f;  // 额外抬离表面，避免初始嵌入
+        const float PLAYER_START_HEIGHT = PLANET_ACTUAL_RADIUS + CAPSULE_HALF_HEIGHT + CONTROLLER_CONTACT_OFFSET + PLAYER_SURFACE_PADDING;
         
-        entt::entity sphereEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+        std::stringstream configLog;
+        configLog << "Planet Config: Scale=" << PLANET_SCALE 
+                  << ", Actual Radius=" << PLANET_ACTUAL_RADIUS 
+                  << "m, Player Height=" << PLAYER_START_HEIGHT << "m";
+        outer_wilds::DebugManager::GetInstance().Log("Main", configLog.str());
+        
+        // 创建星球物理配置
+        outer_wilds::PhysicsOptions planetPhysics;
+        planetPhysics.addCollider = true;
+        planetPhysics.addRigidBody = true;
+        planetPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
+        planetPhysics.sphereRadius = PLANET_MODEL_RADIUS;  // 6.4米,会自动乘scale变成64米
+        planetPhysics.mass = 0.0f;                         // 静态物体
+        planetPhysics.useGravity = false;                  // 星球本身不受重力
+        planetPhysics.isKinematic = true;
+        planetPhysics.staticFriction = 0.8f;
+        planetPhysics.dynamicFriction = 0.6f;
+        planetPhysics.restitution = 0.2f;
+
+        // 加载星球模型
+        entt::entity planetEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
             scene->GetRegistry(),
             scene,
             engine.GetRenderSystem()->GetBackend()->GetDevice(),
             "assets/BlendObj/planet1.obj",
             "assets/Texture/plastered_stone_wall_diff_2k.jpg",
-            DirectX::XMFLOAT3(3.0f, 2.0f, 0.0f),  // Position: 3m to the right, 2m up
-            DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f)   // Scale: 1x
+            DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),           // 星球中心在原点
+            DirectX::XMFLOAT3(PLANET_SCALE, PLANET_SCALE, PLANET_SCALE),  // 缩放10倍
+            &planetPhysics
         );
 
-        if (sphereEntity != entt::null) {
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Sphere entity created successfully!");
+        if (planetEntity != entt::null) {
+            // 添加重力源组件
+            auto& gravitySource = scene->GetRegistry().emplace<outer_wilds::components::GravitySourceComponent>(planetEntity);
+            gravitySource.radius = PLANET_ACTUAL_RADIUS;        // 64米
+            gravitySource.surfaceGravity = 9.8f;
+            gravitySource.atmosphereHeight = 20.0f;              // 大气层20米
+            gravitySource.useRealisticGravity = false;
+            gravitySource.isActive = true;
             
-            // Optional: Add physics to the sphere (static or dynamic)
-            // For now, it's just a visual object following ECS pattern
+            std::stringstream gravLog;
+            gravLog << "Planet gravity source: radius=" << gravitySource.radius 
+                    << "m, influence=" << gravitySource.GetInfluenceRadius() << "m";
+            outer_wilds::DebugManager::GetInstance().Log("Main", gravLog.str());
+            
+            // 验证物理Actor是否创建
+            auto* rigidBody = scene->GetRegistry().try_get<outer_wilds::RigidBodyComponent>(planetEntity);
+            if (rigidBody) {
+                if (rigidBody->physxActor) {
+                    outer_wilds::DebugManager::GetInstance().Log("Main", "Planet PhysX actor created successfully");
+                } else {
+                    outer_wilds::DebugManager::GetInstance().Log("Main", "Planet PhysX actor is NULL!");
+                }
+            } else {
+                outer_wilds::DebugManager::GetInstance().Log("Main", "Planet has no RigidBodyComponent!");
+            }
+            
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Planet created successfully at origin (0,0,0)");
         } else {
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load sphere entity!");
+            outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to create planet!");
         }
 
         // ========================================
-        // For Large Scenes: Best Practices
+        // 创建参考网格平面
         // ========================================
-        // 1. Use SceneAssetLoader::LoadSceneFromFile() to load entire scene from JSON/XML
-        //    Example scene file structure:
-        //    {
-        //      "objects": [
-        //        {"model": "planet1.obj", "texture": "stone.jpg", "position": [0,0,0]},
-        //        {"model": "planet2.obj", "texture": "stone.jpg", "position": [10,0,0]},
-        //        ...hundreds of objects...
-        //      ]
-        //    }
-        //
-        // 2. Share mesh/material resources for repeated objects (instancing):
-        //    auto sharedMesh = SceneAssetLoader::LoadMeshResource("planet1.obj");
-        //    auto sharedMat = SceneAssetLoader::CreateMaterialResource(device, "stone.jpg");
-        //    for (int i = 0; i < 100; i++) {
-        //        auto entity = registry.create();
-        //        registry.emplace<TransformComponent>(entity, position, rotation, scale);
-        //        registry.emplace<MeshComponent>(entity, sharedMesh, sharedMat);  // Reuse!
-        //    }
-        //
-        // 3. Use spatial partitioning (Octree/BVH) for culling:
-        //    - Only render entities visible to camera
-        //    - Implement frustum culling in RenderSystem
-        //
-        // 4. Level of Detail (LOD):
-        //    - Store multiple mesh versions with different detail
-        //    - Switch based on distance from camera
-        //    - Use RenderPriorityComponent.lodLevel
-        //
-        // 5. Async loading:
-        //    - Load heavy assets (models/textures) in background thread
-        //    - Create entities in main thread once loaded
-        //
-        // 6. Each object MUST have these components:
-        //    - TransformComponent: Position, rotation, scale
-        //    - MeshComponent: Shared mesh + material resources
-        //    - RenderableComponent: Visibility, shadows
-        //    - RenderPriorityComponent: Sort key, render pass, LOD
-        //    - Optional: PhysicsComponent for collision
-        // ========================================
+        auto gridEntity = scene->CreateEntity("grid_reference");
+        auto& gridTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(gridEntity);
+        gridTransform.position = {0.0f, 0.0f, 0.0f};
+        gridTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        gridTransform.scale = {1.0f, 1.0f, 1.0f};
+        
+        auto& gridMeshComponent = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(gridEntity);
+        gridMeshComponent.mesh = groundMesh;
+        gridMeshComponent.material = groundRenderMaterial;
+        gridMeshComponent.isVisible = true;
+        gridMeshComponent.castsShadows = false;
+        
+        auto& gridRenderPriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(gridEntity);
+        gridRenderPriority.renderPass = 0;
+        gridRenderPriority.sortKey = 50;
+        gridRenderPriority.lodLevel = 0;
+        
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Reference grid created");
 
-        // Create a player entity with character controller
+        // ========================================
+        // 创建玩家
+        // ========================================
+        outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Player ===");
+        
         auto playerEntity = scene->CreateEntity("player");
         auto& playerTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(playerEntity);
-        playerTransform.position = {0.0f, 2.0f, -5.0f}; // Start above ground
+        playerTransform.position = {0.0f, PLAYER_START_HEIGHT, 0.0f};  // 使用计算好的高度
         playerTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        
+        std::stringstream playerLog;
+        playerLog << "Player spawn position: (0, " << PLAYER_START_HEIGHT << ", 0)\n"
+                  << "  - Planet radius: " << PLANET_ACTUAL_RADIUS << "m\n"
+                  << "  - Distance from center: " << PLAYER_START_HEIGHT << "m\n"
+                  << "  - Height above surface: " << (PLAYER_START_HEIGHT - PLANET_ACTUAL_RADIUS) << "m";
+        outer_wilds::DebugManager::GetInstance().Log("Main", playerLog.str());
+        
+        // Add player component
+        scene->GetRegistry().emplace<outer_wilds::PlayerComponent>(playerEntity);
+        
+        // === 添加重力影响组件（启用球面重力）===
+        auto& playerGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(playerEntity);
+        playerGravity.affectedByGravity = true;  // 启用球面重力
+        playerGravity.gravityScale = 1.0f;
+        
+        // === 添加玩家对齐组件（启用自动对齐）===
+        auto& playerAlignment = scene->GetRegistry().emplace<outer_wilds::components::PlayerAlignmentComponent>(playerEntity);
+        playerAlignment.autoAlign = true;  // 启用自动对齐到星球表面
+        playerAlignment.alignmentSpeed = 5.0f;
+        playerAlignment.lockRoll = true;
+        playerAlignment.preserveForward = true;
+        playerAlignment.alignmentDeadZone = 0.5f;
+        
+        // === 添加玩家可视化模型（用于观察视角调试）===
+        // player.obj尺寸：1m x 3.6m x 1m（Y轴从-1.8到1.8）
+        // 需要缩小到适应胶囊体（高1.6m，半径0.4m）
+        const float PLAYER_MODEL_SCALE = 0.25f; // 缩小到0.9m高
+        entt::entity playerModelEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+            scene->GetRegistry(),
+            scene,
+            engine.GetRenderSystem()->GetBackend()->GetDevice(),
+            "assets/BlendObj/player.obj",
+            "",  // 不指定纹理，使用MTL文件中的Kd颜色
+            playerTransform.position,
+            DirectX::XMFLOAT3(PLAYER_MODEL_SCALE, PLAYER_MODEL_SCALE, PLAYER_MODEL_SCALE),
+            nullptr  // 玩家模型不需要物理
+        );
+        
+        if (playerModelEntity != entt::null) {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Player visual model loaded");
+            // 将玩家模型实体 ID 存储到 PlayerComponent 中，以便同步位置
+            auto& playerComp = scene->GetRegistry().get<outer_wilds::PlayerComponent>(playerEntity);
+            playerComp.visualModelEntity = playerModelEntity;
+        } else {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load player model");
+        }
         
         // Create PhysX capsule character controller
         physx::PxCapsuleControllerDesc controllerDesc;
-        controllerDesc.height = 1.6f;          // 身高1.6米
-        controllerDesc.radius = 0.4f;          // 半径0.4米
+        controllerDesc.height = CONTROLLER_HEIGHT;
+        controllerDesc.radius = CONTROLLER_RADIUS;
         controllerDesc.position = physx::PxExtendedVec3(playerTransform.position.x, playerTransform.position.y, playerTransform.position.z);
-        controllerDesc.material = groundPhysicsMaterial;  // 使用相同的材质以获得摩擦力
+        
+        std::stringstream ctrlLog;
+        ctrlLog << "Controller setup: height=" << CONTROLLER_HEIGHT 
+                << "m, radius=" << CONTROLLER_RADIUS 
+                << "m, spawn at (" << playerTransform.position.x << ", " 
+                << playerTransform.position.y << ", " << playerTransform.position.z << ")";
+        outer_wilds::DebugManager::GetInstance().Log("Main", ctrlLog.str());
+        
+        controllerDesc.material = groundPhysicsMaterial;
         controllerDesc.stepOffset = 0.5f;      // 可以爬0.5米的台阶
-        controllerDesc.contactOffset = 0.1f;
+        controllerDesc.contactOffset = CONTROLLER_CONTACT_OFFSET;
         controllerDesc.slopeLimit = cosf(DirectX::XM_PIDIV4); // 45度最大坡度
         controllerDesc.climbingMode = physx::PxCapsuleClimbingMode::eEASY;
         
@@ -255,6 +403,13 @@ int main(int argc, char* argv[]) {
             outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to create character controller!");
             return 0;
         }
+        
+        // 验证控制器实际位置
+        physx::PxExtendedVec3 actualPos = controller->getPosition();
+        std::stringstream verifyLog;
+        verifyLog << "Controller created! Actual position: (" 
+                  << (float)actualPos.x << ", " << (float)actualPos.y << ", " << (float)actualPos.z << ")";
+        outer_wilds::DebugManager::GetInstance().Log("Main", verifyLog.str());
         
         // Add character controller component
         auto& characterController = scene->GetRegistry().emplace<outer_wilds::components::CharacterControllerComponent>(playerEntity);
@@ -271,7 +426,7 @@ int main(int argc, char* argv[]) {
         playerCamera.nearPlane = 0.1f;
         playerCamera.farPlane = 1000.0f;
         playerCamera.position = playerTransform.position;
-        playerCamera.target = {0.0f, 2.0f, 0.0f}; // Look forward
+        playerCamera.target = {0.0f, PLAYER_START_HEIGHT, 1.0f};  // 向前看(Z+方向)
         playerCamera.up = {0.0f, 1.0f, 0.0f};
         playerCamera.yaw = 0.0f;
         playerCamera.pitch = 0.0f;
@@ -280,7 +435,139 @@ int main(int argc, char* argv[]) {
         
         // Add player input component
         auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
-        playerInput.mouseLookEnabled = true; // 默认启用鼠标视角
+        playerInput.mouseLookEnabled = true;
+        
+        // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
+        
+        // ========================================
+        // 创建参考网格立方体（调试用）
+        // ========================================
+        // 创建一个包裹星球的大立方体，用于可视化调试相机旋转问题
+        auto debugCubeMesh = std::make_shared<outer_wilds::resources::Mesh>();
+        std::vector<outer_wilds::resources::Vertex> cubeVertices;
+        std::vector<uint32_t> cubeIndices;
+        
+        // 立方体尺寸：略大于星球直径（64m半径 * 2 = 128m，使用150m立方体）
+        const float cubeSize = 150.0f;
+        const float h = cubeSize * 0.5f; // 半边长
+        
+        // 定义8个顶点（立方体的8个角）
+        DirectX::XMFLOAT3 corners[8] = {
+            {-h, -h, -h}, // 0: left-bottom-back
+            { h, -h, -h}, // 1: right-bottom-back
+            { h,  h, -h}, // 2: right-top-back
+            {-h,  h, -h}, // 3: left-top-back
+            {-h, -h,  h}, // 4: left-bottom-front
+            { h, -h,  h}, // 5: right-bottom-front
+            { h,  h,  h}, // 6: right-top-front
+            {-h,  h,  h}  // 7: left-top-front
+        };
+        
+        // 创建网格线（每个面上画网格）
+        // 每个面分成10x10的网格
+        const int gridDivisions = 10;
+        const float gridStep = cubeSize / gridDivisions;
+        
+        // 为了简化，只渲染立方体的边框线（12条边）
+        // 使用线段渲染，这里我们用三角形模拟细线
+        DirectX::XMFLOAT3 cubeNormals[6] = {
+            {0, 0, -1}, // back
+            {0, 0, 1},  // front
+            {-1, 0, 0}, // left
+            {1, 0, 0},  // right
+            {0, -1, 0}, // bottom
+            {0, 1, 0}   // top
+        };
+        
+        // 创建6个面，每个面使用网格纹理坐标
+        // 简化版本：创建一个大立方体框架（只显示边线）
+        
+        // Back face (Z = -h)
+        cubeVertices.push_back({{-h, -h, -h}, {0, 0, -1}, {0, 0}});
+        cubeVertices.push_back({{ h, -h, -h}, {0, 0, -1}, {1, 0}});
+        cubeVertices.push_back({{ h,  h, -h}, {0, 0, -1}, {1, 1}});
+        cubeVertices.push_back({{-h,  h, -h}, {0, 0, -1}, {0, 1}});
+        
+        // Front face (Z = h)
+        cubeVertices.push_back({{ h, -h,  h}, {0, 0, 1}, {0, 0}});
+        cubeVertices.push_back({{-h, -h,  h}, {0, 0, 1}, {1, 0}});
+        cubeVertices.push_back({{-h,  h,  h}, {0, 0, 1}, {1, 1}});
+        cubeVertices.push_back({{ h,  h,  h}, {0, 0, 1}, {0, 1}});
+        
+        // Left face (X = -h)
+        cubeVertices.push_back({{-h, -h,  h}, {-1, 0, 0}, {0, 0}});
+        cubeVertices.push_back({{-h, -h, -h}, {-1, 0, 0}, {1, 0}});
+        cubeVertices.push_back({{-h,  h, -h}, {-1, 0, 0}, {1, 1}});
+        cubeVertices.push_back({{-h,  h,  h}, {-1, 0, 0}, {0, 1}});
+        
+        // Right face (X = h)
+        cubeVertices.push_back({{ h, -h, -h}, {1, 0, 0}, {0, 0}});
+        cubeVertices.push_back({{ h, -h,  h}, {1, 0, 0}, {1, 0}});
+        cubeVertices.push_back({{ h,  h,  h}, {1, 0, 0}, {1, 1}});
+        cubeVertices.push_back({{ h,  h, -h}, {1, 0, 0}, {0, 1}});
+        
+        // Bottom face (Y = -h)
+        cubeVertices.push_back({{-h, -h,  h}, {0, -1, 0}, {0, 0}});
+        cubeVertices.push_back({{ h, -h,  h}, {0, -1, 0}, {1, 0}});
+        cubeVertices.push_back({{ h, -h, -h}, {0, -1, 0}, {1, 1}});
+        cubeVertices.push_back({{-h, -h, -h}, {0, -1, 0}, {0, 1}});
+        
+        // Top face (Y = h)
+        cubeVertices.push_back({{-h,  h, -h}, {0, 1, 0}, {0, 0}});
+        cubeVertices.push_back({{ h,  h, -h}, {0, 1, 0}, {1, 0}});
+        cubeVertices.push_back({{ h,  h,  h}, {0, 1, 0}, {1, 1}});
+        cubeVertices.push_back({{-h,  h,  h}, {0, 1, 0}, {0, 1}});
+        
+        // 创建索引（每个面2个三角形）
+        for (uint32_t i = 0; i < 6; i++) {
+            uint32_t base = i * 4;
+            cubeIndices.push_back(base + 0);
+            cubeIndices.push_back(base + 1);
+            cubeIndices.push_back(base + 2);
+            cubeIndices.push_back(base + 0);
+            cubeIndices.push_back(base + 2);
+            cubeIndices.push_back(base + 3);
+        }
+        
+        debugCubeMesh->SetVertices(cubeVertices);
+        debugCubeMesh->SetIndices(cubeIndices);
+        
+        // 创建纯色材质（不使用纹理，避免和星球纹理混淆）
+        auto debugCubeMaterial = std::make_shared<outer_wilds::resources::Material>();
+        debugCubeMaterial->albedo = {0.8f, 0.8f, 0.8f, 0.2f}; // 半透明灰白色
+        debugCubeMaterial->metallic = 0.0f;
+        debugCubeMaterial->roughness = 1.0f;
+        debugCubeMaterial->ao = 1.0f;
+        debugCubeMaterial->isTransparent = true;
+        debugCubeMaterial->shaderProgram = nullptr;  // 明确设置为nullptr，不使用纹理
+        debugCubeMaterial->albedoTexture = "";       // 空纹理路径
+        
+        auto debugCubeEntity = scene->CreateEntity("debug_cube");
+        auto& debugCubeTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(debugCubeEntity);
+        debugCubeTransform.position = {0.0f, 0.0f, 0.0f};
+        debugCubeTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        debugCubeTransform.scale = {1.0f, 1.0f, 1.0f};
+        
+        auto& debugCubeMeshComp = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(debugCubeEntity);
+        debugCubeMeshComp.mesh = debugCubeMesh;
+        debugCubeMeshComp.material = debugCubeMaterial;
+        debugCubeMeshComp.isVisible = true;
+        debugCubeMeshComp.castsShadows = false;
+        
+        auto& debugCubePriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(debugCubeEntity);
+        debugCubePriority.renderPass = 1;  // Transparent pass
+        debugCubePriority.sortKey = 200;   // 最后渲染
+        debugCubePriority.lodLevel = 0;
+        
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Debug reference cube created (150m)");
+        
+        // ========================================
+        // 输出完整的启动日志
+        // ========================================
+        std::cout << "\n=== STARTUP LOGS ===" << std::endl;
+        outer_wilds::DebugManager::GetInstance().ForcePrint();
+        std::cout << "===================\n" << std::endl;
         
         engine.Run();
     }

@@ -20,10 +20,22 @@ struct CameraComponent : public Component {
     bool isActive = true;
     
     // First-person camera control
-    float yaw = 0.0f;   // Horizontal rotation (radians)
-    float pitch = 0.0f; // Vertical rotation (radians)
+    float yaw = 0.0f;   // Horizontal rotation (radians) - DEPRECATED for spherical gravity
+    float pitch = 0.0f; // Vertical rotation (radians) - DEPRECATED for spherical gravity
     float moveSpeed = 10.0f;
     float lookSensitivity = 0.002f;
+    
+    // === 球面重力相机系统：局部参考系 ===
+    // 核心思想：相机旋转相对于玩家的局部坐标系，而非世界坐标系
+    
+    // 局部坐标系（每帧根据重力方向更新）
+    DirectX::XMFLOAT3 localUp = {0.0f, 1.0f, 0.0f};        // 重力反方向（远离星球中心）
+    DirectX::XMFLOAT3 localForward = {0.0f, 0.0f, 1.0f};   // 切平面上的参考前方
+    DirectX::XMFLOAT3 localRight = {1.0f, 0.0f, 0.0f};     // 切平面上的参考右方
+    
+    // 相对旋转（相对于局部坐标系，由鼠标输入修改）
+    float relativeYaw = 0.0f;    // 相对localForward的水平旋转角（弧度）
+    float relativePitch = 0.0f;  // 相对切平面的俯仰角（弧度）
 };
 
 } // namespace components

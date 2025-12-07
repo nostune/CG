@@ -3,7 +3,11 @@
 #include "TimeManager.h"
 #include "../graphics/RenderSystem.h"
 #include "../physics/PhysicsSystem.h"
+#include "../physics/GravitySystem.h"
 #include "../gameplay/PlayerSystem.h"
+#include "../gameplay/PlayerAlignmentSystem.h"
+#include "../graphics/FreeCameraSystem.h"
+#include "../graphics/CameraModeSystem.h"
 #include "../input/InputManager.h"
 #include "../physics/PhysXManager.h"
 #include "../scene/SceneManager.h"
@@ -43,8 +47,22 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     m_PhysicsSystem = AddSystem<PhysicsSystem>();
     m_PhysicsSystem->Initialize(m_SceneManager->GetActiveScene());
 
+    // 重力系统（在PhysicsSystem之前，用于计算重力）
+    m_GravitySystem = AddSystem<GravitySystem>();
+
+    // 玩家对齐系统（在PlayerSystem之前，用于调整玩家姿态）
+    m_PlayerAlignmentSystem = AddSystem<PlayerAlignmentSystem>();
+
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 相机模式系统（处理玩家视角/自由视角切换）
+    m_CameraModeSystem = AddSystem<CameraModeSystem>();
+    m_CameraModeSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 自由相机系统（在CameraModeSystem之后，处理自由视角移动）
+    m_FreeCameraSystem = AddSystem<FreeCameraSystem>();
+    m_FreeCameraSystem->Initialize(m_SceneManager->GetActiveScene());
 
     m_Running = true;
     return true;

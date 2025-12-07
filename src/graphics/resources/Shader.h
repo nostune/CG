@@ -15,6 +15,9 @@ public:
     void Unbind(ID3D11DeviceContext* context) const;
 
 private:
+    bool LoadEmbeddedGridShader(ID3D11Device* device);
+    bool LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath);
+
     std::string m_VertexPath;
     std::string m_PixelPath;
 

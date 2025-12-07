@@ -2,6 +2,7 @@
 #include "Mesh.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <DirectXMath.h>
 
 namespace outer_wilds {
@@ -22,13 +23,18 @@ private:
         int positionIndices[3];
         int normalIndices[3];
         int texCoordIndices[3];
+        DirectX::XMFLOAT3 materialColor = {1.0f, 1.0f, 1.0f};  // MTL文件中的Kd颜色
     };
 
     static bool ParseOBJFile(const std::string& filename,
                            std::vector<DirectX::XMFLOAT3>& positions,
                            std::vector<DirectX::XMFLOAT3>& normals,
                            std::vector<DirectX::XMFLOAT2>& texCoords,
-                           std::vector<OBJFace>& faces);
+                           std::vector<OBJFace>& faces,
+                           std::unordered_map<std::string, DirectX::XMFLOAT3>& materials);
+    
+    static void ParseMTLForColors(const std::string& mtlPath,
+                                 std::unordered_map<std::string, DirectX::XMFLOAT3>& materials);
 };
 
 } // namespace resources

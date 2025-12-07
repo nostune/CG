@@ -21,6 +21,28 @@ bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, c
     m_VertexPath = vertexPath;
     m_PixelPath = pixelPath;
 
+    // ============================================
+    // IMPORTANT: Shader Loading Strategy
+    // ============================================
+    // - "grid.vs" + "grid.ps" → Use embedded grid shader (no texture, procedural grid)
+    // - "textured.vs" + "textured.ps" → Load from shaders/textured.hlsl (supports textures)
+    // - Other names → Load from corresponding .hlsl file
+    // 
+    // WHY: Grid shader is hardcoded for performance, textured shader reads from file for flexibility
+    // ============================================
+    
+    bool useEmbedded = (vertexPath == "grid.vs" && pixelPath == "grid.ps");
+    
+    if (useEmbedded) {
+        // Use embedded grid shader for ground plane
+        return LoadEmbeddedGridShader(device);
+    } else {
+        // Load from HLSL file (e.g., shaders/textured.hlsl)
+        return LoadFromHLSLFile(device, vertexPath, pixelPath);
+    }
+}
+
+bool Shader::LoadEmbeddedGridShader(ID3D11Device* device) {
     // For now, we'll use embedded shader code for grid ground
     const char* vertexShaderCode = R"(
         cbuffer PerFrame : register(b0)
@@ -151,6 +173,8 @@ bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, c
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         };
 
         device->CreateInputLayout(layoutDesc, ARRAYSIZE(layoutDesc), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &inputLayout);
@@ -161,6 +185,140 @@ bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, c
     if (errorBlob) errorBlob->Release();
 
     DebugManager::GetInstance().Log("Shader", "Grid ground shader loaded successfully");
+    return true;
+}
+
+bool Shader::LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath) {
+    // ============================================
+    // Construct HLSL file path from shader name
+    // ============================================
+    // Example: "textured.vs" → "shaders/textured.hlsl"
+    // Both vertex and pixel shaders are in the same .hlsl file
+    // ============================================
+    
+    std::string hlslFile = vsPath;
+    // Remove .vs or .ps extension, expect .hlsl
+    size_t dotPos = hlslFile.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        hlslFile = hlslFile.substr(0, dotPos);
+    }
+    hlslFile = "shaders/" + hlslFile + ".hlsl";
+    
+    // Read HLSL file
+    std::ifstream file(hlslFile);
+    if (!file.is_open()) {
+        DebugManager::GetInstance().Log("Shader", "Failed to open HLSL file: " + hlslFile);
+        return false;
+    }
+    
+    std::string hlslCode((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+    
+    if (hlslCode.empty()) {
+        DebugManager::GetInstance().Log("Shader", "HLSL file is empty: " + hlslFile);
+        return false;
+    }
+    
+    DebugManager::GetInstance().Log("Shader", "Loaded HLSL file: " + hlslFile + " (" + std::to_string(hlslCode.size()) + " bytes)");
+    
+    // Compile vertex shader
+    ID3DBlob* vsBlob = nullptr;
+    ID3DBlob* psBlob = nullptr;
+    ID3DBlob* errorBlob = nullptr;
+    
+    HRESULT hr = D3DCompile(
+        hlslCode.c_str(),
+        hlslCode.size(),
+        hlslFile.c_str(),
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "VSMain",
+        "vs_5_0",
+        D3DCOMPILE_ENABLE_STRICTNESS,
+        0,
+        &vsBlob,
+        &errorBlob
+    );
+    
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            DebugManager::GetInstance().Log("Shader", "Vertex shader compilation failed: " + 
+                std::string((char*)errorBlob->GetBufferPointer()));
+            errorBlob->Release();
+        }
+        DebugManager::GetInstance().Log("Shader", "Failed to compile vertex shader from: " + hlslFile);
+        return false;
+    }
+    
+    // Compile pixel shader
+    hr = D3DCompile(
+        hlslCode.c_str(),
+        hlslCode.size(),
+        hlslFile.c_str(),
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "PSMain",
+        "ps_5_0",
+        D3DCOMPILE_ENABLE_STRICTNESS,
+        0,
+        &psBlob,
+        &errorBlob
+    );
+    
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            DebugManager::GetInstance().Log("Shader", "Pixel shader compilation failed: " + 
+                std::string((char*)errorBlob->GetBufferPointer()));
+            errorBlob->Release();
+        }
+        if (vsBlob) vsBlob->Release();
+        DebugManager::GetInstance().Log("Shader", "Failed to compile pixel shader from: " + hlslFile);
+        return false;
+    }
+    
+    // Create shader objects
+    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vertexShader);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("Shader", "Failed to create vertex shader");
+        vsBlob->Release();
+        psBlob->Release();
+        return false;
+    }
+    
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &pixelShader);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("Shader", "Failed to create pixel shader");
+        vsBlob->Release();
+        psBlob->Release();
+        return false;
+    }
+    
+    // Create input layout
+    D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    
+    hr = device->CreateInputLayout(
+        layoutDesc,
+        ARRAYSIZE(layoutDesc),
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
+        &inputLayout
+    );
+    
+    vsBlob->Release();
+    psBlob->Release();
+    
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("Shader", "Failed to create input layout");
+        return false;
+    }
+    
+    DebugManager::GetInstance().Log("Shader", "✅ Successfully loaded shader from: " + hlslFile);
     return true;
 }
 

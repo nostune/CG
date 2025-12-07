@@ -4,6 +4,8 @@
 #include "components/PlayerInputComponent.h"
 #include "components/CharacterControllerComponent.h"
 #include "../graphics/components/CameraComponent.h"
+#include "../graphics/components/FreeCameraComponent.h"
+#include "../physics/components/GravityAffectedComponent.h"
 #include "../input/InputManager.h"
 #include "../physics/PhysXManager.h"
 #include "../core/DebugManager.h"
@@ -80,10 +82,78 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         
         if (!character.controller) continue;
 
-        // Get camera direction vectors
-        float yaw = camera.yaw;
-        DirectX::XMVECTOR forward = DirectX::XMVectorSet(sinf(yaw), 0.0f, cosf(yaw), 0.0f);
-        DirectX::XMVECTOR right = DirectX::XMVectorSet(cosf(yaw), 0.0f, -sinf(yaw), 0.0f);
+        // 跳过自由相机模式
+        if (registry.all_of<components::FreeCameraComponent>(entity)) {
+            auto& freeCamera = registry.get<components::FreeCameraComponent>(entity);
+            if (freeCamera.isActive) continue;
+        }
+
+        // === 步骤1：更新局部参考系（基于重力方向） ===
+        DirectX::XMVECTOR localUp, localForward, localRight;
+        auto* gravity = registry.try_get<components::GravityAffectedComponent>(entity);
+        
+        if (gravity && gravity->affectedByGravity) {
+            // 球面重力模式：局部Up = 重力反方向
+            DirectX::XMVECTOR gravityDir = DirectX::XMLoadFloat3(&gravity->currentGravityDir);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3Length(gravityDir)) < 0.001f) {
+                gravityDir = DirectX::XMVectorSet(0, -1, 0, 0);
+            }
+            gravityDir = DirectX::XMVector3Normalize(gravityDir);
+            localUp = DirectX::XMVectorNegate(gravityDir);
+            
+            // 将上一帧的localForward投影到当前切平面，保持方向连续性
+            DirectX::XMVECTOR lastLocalForward = DirectX::XMLoadFloat3(&camera.localForward);
+            DirectX::XMVECTOR projection = DirectX::XMVectorSubtract(
+                lastLocalForward,
+                DirectX::XMVectorScale(localUp, DirectX::XMVectorGetX(DirectX::XMVector3Dot(lastLocalForward, localUp)))
+            );
+            
+            float projLength = DirectX::XMVectorGetX(DirectX::XMVector3Length(projection));
+            if (projLength > 0.01f) {
+                localForward = DirectX::XMVector3Normalize(projection);
+            } else {
+                // 投影失败（几乎垂直），使用世界参考重新初始化
+                DirectX::XMVECTOR worldRef = DirectX::XMVectorSet(0, 0, 1, 0);
+                if (abs(DirectX::XMVectorGetX(DirectX::XMVector3Dot(localUp, worldRef))) > 0.99f) {
+                    worldRef = DirectX::XMVectorSet(1, 0, 0, 0);
+                }
+                projection = DirectX::XMVectorSubtract(
+                    worldRef,
+                    DirectX::XMVectorScale(localUp, DirectX::XMVectorGetX(DirectX::XMVector3Dot(worldRef, localUp)))
+                );
+                localForward = DirectX::XMVector3Normalize(projection);
+            }
+            
+            localRight = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(localUp, localForward));
+            
+            // 存储局部坐标系供下一帧使用
+            DirectX::XMStoreFloat3(&camera.localUp, localUp);
+            DirectX::XMStoreFloat3(&camera.localForward, localForward);
+            DirectX::XMStoreFloat3(&camera.localRight, localRight);
+        } else {
+            // 平面重力模式：使用世界坐标系
+            localUp = DirectX::XMVectorSet(0, 1, 0, 0);
+            localForward = DirectX::XMVectorSet(0, 0, 1, 0);
+            localRight = DirectX::XMVectorSet(1, 0, 0, 0);
+        }
+
+        // === 步骤2：计算最终视线方向（局部坐标系 + 相对旋转） ===
+        // 2.1 应用相对Yaw（水平旋转）
+        DirectX::XMVECTOR yawQuat = DirectX::XMQuaternionRotationAxis(localUp, camera.relativeYaw);
+        DirectX::XMVECTOR yawedForward = DirectX::XMVector3Rotate(localForward, yawQuat);
+        DirectX::XMVECTOR yawedRight = DirectX::XMVector3Rotate(localRight, yawQuat);
+        
+        // 2.2 应用相对Pitch（俯仰旋转）
+        DirectX::XMVECTOR pitchQuat = DirectX::XMQuaternionRotationAxis(yawedRight, camera.relativePitch);
+        DirectX::XMVECTOR finalDirection = DirectX::XMVector3Normalize(DirectX::XMVector3Rotate(yawedForward, pitchQuat));
+        
+        // 2.3 计算相机Up向量（避免LookAt奇点）
+        DirectX::XMVECTOR cameraUp = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(finalDirection, yawedRight));
+        DirectX::XMStoreFloat3(&camera.up, cameraUp);
+        
+        // === 步骤3：计算移动方向（使用yawedForward，忽略Pitch） ===
+        DirectX::XMVECTOR forward = yawedForward;  // 水平前方
+        DirectX::XMVECTOR right = yawedRight;      // 水平右方
 
         // Calculate horizontal movement
         DirectX::XMVECTOR moveDir = DirectX::XMVectorAdd(
@@ -100,28 +170,30 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         DirectX::XMVECTOR horizontalVelocity = DirectX::XMVectorScale(moveDir, character.moveSpeed);
         
         // Handle jumping and gravity
+        float gravityStrength = (gravity && gravity->affectedByGravity) ? 
+            gravity->currentGravityStrength * gravity->gravityScale : 20.0f;
+        
         if (character.wantsToJump && character.isGrounded) {
             character.verticalVelocity = character.jumpSpeed;
             character.wantsToJump = false;
         }
         
         if (!character.isGrounded) {
-            character.verticalVelocity += character.gravity * deltaTime;
+            character.verticalVelocity -= gravityStrength * deltaTime;
         } else {
             if (character.verticalVelocity < 0.0f) {
                 character.verticalVelocity = 0.0f;
             }
         }
         
-        // Combine horizontal and vertical movement
-        DirectX::XMFLOAT3 hVel;
-        DirectX::XMStoreFloat3(&hVel, horizontalVelocity);
+        // Combine horizontal and vertical movement (使用localUp方向)
+        DirectX::XMVECTOR verticalVelocity = DirectX::XMVectorScale(localUp, character.verticalVelocity);
+        DirectX::XMVECTOR totalVelocity = DirectX::XMVectorAdd(horizontalVelocity, verticalVelocity);
+        DirectX::XMVECTOR displacementVec = DirectX::XMVectorScale(totalVelocity, deltaTime);
         
-        physx::PxVec3 displacement(
-            hVel.x * deltaTime,
-            character.verticalVelocity * deltaTime,
-            hVel.z * deltaTime
-        );
+        DirectX::XMFLOAT3 disp;
+        DirectX::XMStoreFloat3(&disp, displacementVec);
+        physx::PxVec3 displacement(disp.x, disp.y, disp.z);
         
         // Move the character controller
         physx::PxControllerFilters filters;
@@ -134,17 +206,15 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         
         // Update transform to match controller position
         physx::PxExtendedVec3 pos = character.controller->getFootPosition();
-        transform.position = {(float)pos.x, (float)pos.y + 0.9f, (float)pos.z}; // +0.9f for eye height
-        camera.position = transform.position;
+        DirectX::XMVECTOR footPos = DirectX::XMVectorSet((float)pos.x, (float)pos.y, (float)pos.z, 0.0f);
+        
+        // 眼睛位置 = 脚位置 + localUp方向偏移
+        DirectX::XMVECTOR eyePos = DirectX::XMVectorAdd(footPos, DirectX::XMVectorScale(localUp, 0.9f));
+        DirectX::XMStoreFloat3(&transform.position, eyePos);
+        DirectX::XMStoreFloat3(&camera.position, eyePos);
 
-        // Update camera target
-        DirectX::XMVECTOR direction = DirectX::XMVectorSet(
-            cosf(camera.pitch) * sinf(camera.yaw),
-            sinf(camera.pitch),
-            cosf(camera.pitch) * cosf(camera.yaw),
-            0.0f
-        );
-        DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&camera.position), direction);
+        // Update camera target (使用finalDirection)
+        DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(eyePos, finalDirection);
         DirectX::XMStoreFloat3(&camera.target, targetPos);
         
         // Reset inputs
@@ -160,17 +230,27 @@ void PlayerSystem::UpdatePlayerCamera(float deltaTime, entt::registry& registry)
         auto& camera = view.get<CameraComponent>(entity);
         auto& input = view.get<PlayerInputComponent>(entity);
 
+        // 跳过自由相机模式
+        if (registry.all_of<components::FreeCameraComponent>(entity)) {
+            auto& freeCamera = registry.get<components::FreeCameraComponent>(entity);
+            if (freeCamera.isActive) continue;
+        }
+
         // Only update camera if mouse look is enabled
         if (input.mouseLookEnabled) {
-            // Update camera rotation
-            camera.yaw += input.lookInput.x * camera.lookSensitivity;
-            camera.pitch -= input.lookInput.y * camera.lookSensitivity; // Inverted Y
+            // === 核心改动：修改相对旋转，而非绝对旋转 ===
+            camera.relativeYaw += input.lookInput.x * camera.lookSensitivity;
+            camera.relativePitch += input.lookInput.y * camera.lookSensitivity; // 不反向
 
-            // Constrain pitch to prevent flipping
-            const float maxPitch = DirectX::XM_PIDIV2 - 0.1f;  // 89 degrees
-            const float minPitch = -DirectX::XM_PIDIV2 + 0.1f; // -89 degrees
-            if (camera.pitch > maxPitch) camera.pitch = maxPitch;
-            if (camera.pitch < minPitch) camera.pitch = minPitch;
+            // 限制相对Pitch避免万向锁
+            const float maxPitch = DirectX::XM_PIDIV2 - 0.1f;  // 89度
+            const float minPitch = -DirectX::XM_PIDIV2 + 0.1f; // -89度
+            if (camera.relativePitch > maxPitch) camera.relativePitch = maxPitch;
+            if (camera.relativePitch < minPitch) camera.relativePitch = minPitch;
+            
+            // 保留旧的yaw/pitch以兼容平面模式（调试用）
+            camera.yaw = camera.relativeYaw;
+            camera.pitch = camera.relativePitch;
         }
     }
 }

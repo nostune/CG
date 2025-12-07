@@ -10,6 +10,10 @@ namespace outer_wilds {
 class RenderSystem;
 class PhysicsSystem;
 class PlayerSystem;
+class GravitySystem;
+class PlayerAlignmentSystem;
+class FreeCameraSystem;
+class CameraModeSystem;
 
 class Engine {
 public:
@@ -52,6 +56,10 @@ private:
     std::shared_ptr<RenderSystem> m_RenderSystem;
     std::shared_ptr<PhysicsSystem> m_PhysicsSystem;
     std::shared_ptr<PlayerSystem> m_PlayerSystem;
+    std::shared_ptr<GravitySystem> m_GravitySystem;
+    std::shared_ptr<PlayerAlignmentSystem> m_PlayerAlignmentSystem;
+    std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
+    std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
 
     // Common resources
     std::shared_ptr<resources::Mesh> m_PlanetMesh;
