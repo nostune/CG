@@ -426,10 +426,11 @@ int main(int argc, char* argv[]) {
         playerCamera.nearPlane = 0.1f;
         playerCamera.farPlane = 1000.0f;
         playerCamera.position = playerTransform.position;
-        playerCamera.target = {0.0f, PLAYER_START_HEIGHT, 1.0f};  // 向前看(Z+方向)
-        playerCamera.up = {0.0f, 1.0f, 0.0f};
+        // 向下看行星中心 (从 y=65.8 看向 y=0)
+        playerCamera.target = {0.0f, 0.0f, 0.0f};
+        playerCamera.up = {0.0f, 0.0f, 1.0f};  // 使用Z轴作为up向量(适应向下看)
         playerCamera.yaw = 0.0f;
-        playerCamera.pitch = 0.0f;
+        playerCamera.pitch = -90.0f;  // 向下90度
         playerCamera.moveSpeed = 5.0f;
         playerCamera.lookSensitivity = 0.003f;
         
@@ -533,15 +534,31 @@ int main(int argc, char* argv[]) {
         debugCubeMesh->SetVertices(cubeVertices);
         debugCubeMesh->SetIndices(cubeIndices);
         
-        // 创建纯色材质（不使用纹理，避免和星球纹理混淆）
+        // 创建GPU缓冲区
+        debugCubeMesh->CreateGPUBuffers(engine.GetRenderSystem()->GetBackend()->GetDevice());
+        
+        // 创建带纹理的材质
         auto debugCubeMaterial = std::make_shared<outer_wilds::resources::Material>();
-        debugCubeMaterial->albedo = {0.8f, 0.8f, 0.8f, 0.2f}; // 半透明灰白色
+        debugCubeMaterial->albedo = {1.0f, 1.0f, 1.0f, 0.5f}; // 半透明白色
         debugCubeMaterial->metallic = 0.0f;
         debugCubeMaterial->roughness = 1.0f;
         debugCubeMaterial->ao = 1.0f;
         debugCubeMaterial->isTransparent = true;
-        debugCubeMaterial->shaderProgram = nullptr;  // 明确设置为nullptr，不使用纹理
-        debugCubeMaterial->albedoTexture = "";       // 空纹理路径
+        
+        // 加载纹理
+        ID3D11ShaderResourceView* cubeSRV = nullptr;
+        if (outer_wilds::resources::TextureLoader::LoadFromFile(
+            engine.GetRenderSystem()->GetBackend()->GetDevice(),
+            "assets/Texture/plastered_stone_wall_disp_2k.png",
+            &cubeSRV)) {
+            debugCubeMaterial->shaderProgram = cubeSRV;
+            debugCubeMaterial->albedoTexture = "assets/Texture/plastered_stone_wall_disp_2k.png";
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Debug cube texture loaded");
+        } else {
+            debugCubeMaterial->shaderProgram = nullptr;
+            debugCubeMaterial->albedoTexture = "";
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load debug cube texture");
+        }
         
         auto debugCubeEntity = scene->CreateEntity("debug_cube");
         auto& debugCubeTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(debugCubeEntity);

@@ -2,14 +2,10 @@
 #include "../scene/Scene.h"
 #include "../scene/SceneManager.h"
 #include "components/CameraComponent.h"
-#include "components/RenderableComponent.h"
-#include "components/MeshComponent.h"
-#include "components/RenderPriorityComponent.h"
 #include "../scene/components/TransformComponent.h"
 #include "../core/DebugManager.h"
 #include <DirectXMath.h>
 #include <d3d11.h>
-#include <vector>
 
 namespace outer_wilds {
 
@@ -21,6 +17,14 @@ void RenderSystem::Initialize(SceneManager* sceneManager) {
 void RenderSystem::Update(float deltaTime, entt::registry& registry) {
     m_UpdateCounter++;
     bool shouldDebug = (m_UpdateCounter % 100 == 0);
+    
+    // 调试：确认Update被调用
+    static int updateDebugCount = 0;
+    if (updateDebugCount < 3) {
+        std::cout << "[RenderSystem::Update] IMMEDIATE: Called #" << (++updateDebugCount) 
+                  << ", frame=" << m_UpdateCounter << std::endl;
+    }
+    
     if (!m_Backend) return;
 
     // Get current active scene
@@ -37,7 +41,7 @@ void RenderSystem::Update(float deltaTime, entt::registry& registry) {
         return;
     }
 
-    // Render all entities with RenderableComponent
+    // Render all entities
     RenderScene(camera, scenePtr->GetRegistry(), shouldDebug);
 
     m_Backend->EndFrame();
@@ -52,6 +56,11 @@ bool RenderSystem::InitializeBackend(void* hwnd, int width, int height) {
 }
 
 void RenderSystem::RenderScene(components::CameraComponent* camera, entt::registry& registry, bool shouldDebug) {
+    static int renderCount = 0;
+    if (renderCount++ < 3) {
+        std::cout << "[RenderSystem::RenderScene] IMMEDIATE: Called #" << renderCount << std::endl;
+    }
+    
     if (!m_Backend || !camera) return;
 
     auto device = static_cast<ID3D11Device*>(m_Backend->GetDevice());
@@ -119,7 +128,6 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
 
     // Create/update constant buffers
     static ID3D11Buffer* s_perFrameCB = nullptr;
-    static ID3D11Buffer* s_perObjectCB = nullptr;
 
     if (!s_perFrameCB) {
         D3D11_BUFFER_DESC cbDesc = {};
@@ -129,13 +137,13 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
         cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         device->CreateBuffer(&cbDesc, nullptr, &s_perFrameCB);
     }
-    if (!s_perObjectCB) {
+    if (!m_PerObjectCB) {
         D3D11_BUFFER_DESC cbDesc = {};
         cbDesc.Usage = D3D11_USAGE_DYNAMIC;
-        cbDesc.ByteWidth = sizeof(DirectX::XMMATRIX);
+        cbDesc.ByteWidth = 80;  // world(64) + color(16)
         cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        device->CreateBuffer(&cbDesc, nullptr, &s_perObjectCB);
+        device->CreateBuffer(&cbDesc, nullptr, &m_PerObjectCB);
     }
 
     // Update per-frame constant buffer (view-projection matrix)
@@ -150,120 +158,33 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
     }
 
     // ============================================
-    // 阶段1：更新渲染优先级（距离、LOD等）
+    // v0.3.0 渲染管线：Collect -> Sort -> Execute
     // ============================================
-    UpdateRenderPriorities(registry, camera->position);
-
-    // ============================================
-    // 阶段2：收集实体到队列
-    // ============================================
-    m_OpaqueQueue.Clear();
-    m_TransparentQueue.Clear();
     
-    // Collect entities with RenderableComponent (legacy ground plane)
-    auto renderables = registry.view<
-        const components::RenderableComponent, 
-        const TransformComponent
-    >();
-    
-    for (auto entity : renderables) {
-        // 检查是否有 RenderPriority 组件
-        auto* priority = registry.try_get<components::RenderPriorityComponent>(entity);
-        
-        if (priority) {
-            // 跳过不可见的实体（视锥剔除）
-            if (!priority->visible) continue;
-            
-            // 按 renderPass 分类到不同队列
-            if (priority->renderPass == 0) {  // Opaque
-                m_OpaqueQueue.Push(entity);
-            } else if (priority->renderPass == 1) {  // Transparent
-                m_TransparentQueue.Push(entity);
-            }
-        } else {
-            // 没有 Priority 组件的实体默认为 Opaque
-            m_OpaqueQueue.Push(entity);
-        }
+    // 调试：确认执行到这里
+    static int pipelineDebugCount = 0;
+    if (pipelineDebugCount++ < 3) {
+        std::cout << "[RenderSystem] IMMEDIATE: Starting RenderQueue pipeline #" << pipelineDebugCount << std::endl;
     }
     
-    // Collect entities with MeshComponent (new model loading system)
-    auto meshEntities = registry.view<
-        const components::MeshComponent,
-        const TransformComponent
-    >();
+    // 1. 清空并收集批次
+    m_RenderQueue.Clear();
+    m_RenderQueue.CollectFromECS(registry, camera->position);
     
-    for (auto entity : meshEntities) {
-        auto* priority = registry.try_get<components::RenderPriorityComponent>(entity);
-        
-        if (priority) {
-            if (!priority->visible) continue;
-            
-            if (priority->renderPass == 0) {
-                m_OpaqueQueue.Push(entity);
-            } else if (priority->renderPass == 1) {
-                m_TransparentQueue.Push(entity);
-            }
-        } else {
-            // Default to opaque
-            m_OpaqueQueue.Push(entity);
-        }
-    }
+    // 2. 排序（优化状态切换）
+    m_RenderQueue.Sort();
     
-    // ============================================
-    // 阶段3：排序队列
-    // ============================================
-    m_OpaqueQueue.Sort(registry, true);   // 前到后排序
-    m_TransparentQueue.Sort(registry, false);  // 后到前排序
+    // 3. 执行绘制（带状态缓存）
+    m_RenderQueue.Execute(context, m_PerObjectCB);
     
+    // 4. 调试日志
     if (shouldDebug) {
+        const auto& stats = m_RenderQueue.GetStats();
         DebugManager::GetInstance().Log("RenderSystem", 
-            "Queue Stats - Opaque: " + std::to_string(m_OpaqueQueue.Size()) +
-            ", Transparent: " + std::to_string(m_TransparentQueue.Size()));
-    }
-
-    // ============================================
-    // 阶段4：渲染队列
-    // ============================================
-    // 先渲染不透明物体
-    DrawQueue(m_OpaqueQueue, registry);
-    
-    // 再渲染透明物体（未来用于水、大气等）
-    if (!m_TransparentQueue.Empty()) {
-        // TODO: 启用Alpha混合状态
-        DrawQueue(m_TransparentQueue, registry);
-        // TODO: 恢复渲染状态
-    }
-    
-    // 每60帧输出一次详细的渲染顺序信息
-    static int frameCount = 0;
-    if (++frameCount >= 60) {
-        frameCount = 0;
-        outer_wilds::DebugManager::GetInstance().Log("RenderSystem", "=== Render Order Debug ===");
-        outer_wilds::DebugManager::GetInstance().Log("RenderSystem", "Opaque Queue:");
-        int idx = 0;
-        for (const auto& entity : m_OpaqueQueue.GetEntities()) {
-            const auto* priority = registry.try_get<components::RenderPriorityComponent>(entity);
-            if (priority) {
-                std::string msg = "  [" + std::to_string(idx++) + "] Entity ID=" + 
-                                std::to_string(static_cast<uint32_t>(entity)) + 
-                                ", sortKey=" + std::to_string(priority->sortKey) +
-                                ", distance=" + std::to_string(priority->distanceToCamera);
-                outer_wilds::DebugManager::GetInstance().Log("RenderSystem", msg);
-            }
-        }
-        outer_wilds::DebugManager::GetInstance().Log("RenderSystem", "Transparent Queue:");
-        idx = 0;
-        for (const auto& entity : m_TransparentQueue.GetEntities()) {
-            const auto* priority = registry.try_get<components::RenderPriorityComponent>(entity);
-            if (priority) {
-                std::string msg = "  [" + std::to_string(idx++) + "] Entity ID=" + 
-                                std::to_string(static_cast<uint32_t>(entity)) + 
-                                ", sortKey=" + std::to_string(priority->sortKey) +
-                                ", distance=" + std::to_string(priority->distanceToCamera);
-                outer_wilds::DebugManager::GetInstance().Log("RenderSystem", msg);
-            }
-        }
-        outer_wilds::DebugManager::GetInstance().Log("RenderSystem", "========================");
+            "RenderQueue: " + std::to_string(stats.totalBatches) + " batches, " +
+            std::to_string(stats.drawCalls) + " draws, " +
+            std::to_string(stats.shaderSwitches) + " shader switches, " +
+            std::to_string(stats.textureSwitches) + " texture switches");
     }
 }
 
@@ -280,233 +201,6 @@ components::CameraComponent* RenderSystem::FindActiveCamera(entt::registry& regi
     });
 
     return activeCamera;
-}
-
-// ============================================
-// 更新所有实体的渲染优先级
-// ============================================
-void RenderSystem::UpdateRenderPriorities(entt::registry& registry, const DirectX::XMFLOAT3& cameraPos) {
-    auto view = registry.view<const TransformComponent, components::RenderPriorityComponent>();
-    
-    DirectX::XMVECTOR camPosVec = DirectX::XMLoadFloat3(&cameraPos);
-    
-    for (auto [entity, transform, priority] : view.each()) {
-        // 计算到相机的距离
-        DirectX::XMVECTOR entityPos = DirectX::XMLoadFloat3(&transform.position);
-        DirectX::XMVECTOR diff = DirectX::XMVectorSubtract(entityPos, camPosVec);
-        DirectX::XMVECTOR lengthVec = DirectX::XMVector3Length(diff);
-        
-        float distance;
-        DirectX::XMStoreFloat(&distance, lengthVec);
-        priority.distanceToCamera = distance;
-        
-        // TODO: 未来可以在这里实现 LOD 更新
-        // if (distance < 50.0f) priority.lodLevel = 0;
-        // else if (distance < 150.0f) priority.lodLevel = 1;
-        // else priority.lodLevel = 2;
-    }
-}
-
-// ============================================
-// 绘制队列中的所有实体
-// ============================================
-void RenderSystem::DrawQueue(const LightweightRenderQueue& queue, entt::registry& registry) {
-    if (queue.Empty()) return;
-    
-    auto device = static_cast<ID3D11Device*>(m_Backend->GetDevice());
-    auto context = static_cast<ID3D11DeviceContext*>(m_Backend->GetContext());
-    
-    static bool s_firstRun = true;
-    
-    // 获取静态的 perObjectCB
-    static ID3D11Buffer* s_perObjectCB = nullptr;
-    if (!s_perObjectCB) {
-        D3D11_BUFFER_DESC cbDesc = {};
-        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
-        cbDesc.ByteWidth = sizeof(DirectX::XMMATRIX);
-        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        device->CreateBuffer(&cbDesc, nullptr, &s_perObjectCB);
-        if (s_firstRun) DebugManager::GetInstance().Log("DrawQueue", "Created per-object constant buffer");
-    }
-    
-    // 遍历队列中的所有实体
-    int drawCount = 0;
-    for (entt::entity entity : queue.GetEntities()) {
-        auto& transform = registry.get<TransformComponent>(entity);
-        
-        // Check for RenderableComponent (legacy)
-        auto* renderable = registry.try_get<components::RenderableComponent>(entity);
-        if (renderable) {
-            // 验证组件
-            if (!renderable->mesh || !renderable->shader) {
-                if (s_firstRun) DebugManager::GetInstance().Log("DrawQueue", "Skipping entity: missing mesh or shader");
-                continue;
-            }
-            
-            // 创建 GPU buffers
-            if (!renderable->mesh->vertexBuffer) {
-                const_cast<resources::Mesh*>(renderable->mesh.get())->CreateGPUBuffers(device);
-            }
-            if (!renderable->mesh->vertexBuffer) {
-                if (s_firstRun) DebugManager::GetInstance().Log("DrawQueue", "Skipping entity: failed to create vertex buffer");
-                continue;
-            }
-            
-            // 获取世界矩阵
-            DirectX::XMMATRIX worldMatrix = transform.GetWorldMatrix();
-            
-            // 绑定 shader
-            renderable->shader->Bind(context);
-            
-            // 更新 per-object constant buffer
-            if (s_perObjectCB) {
-                D3D11_MAPPED_SUBRESOURCE mapped;
-                if (SUCCEEDED(context->Map(s_perObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-                    DirectX::XMMATRIX worldTransposed = DirectX::XMMatrixTranspose(worldMatrix);
-                    memcpy(mapped.pData, &worldTransposed, sizeof(DirectX::XMMATRIX));
-                    context->Unmap(s_perObjectCB, 0);
-                }
-                context->VSSetConstantBuffers(1, 1, &s_perObjectCB);
-            }
-            
-            // 设置顶点缓冲
-            UINT stride = sizeof(resources::Vertex);
-            UINT offset = 0;
-            auto vertexBuffer = static_cast<ID3D11Buffer*>(renderable->mesh->vertexBuffer);
-            context->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
-            
-            // 设置索引缓冲
-            if (renderable->mesh->indexBuffer) {
-                auto indexBuffer = static_cast<ID3D11Buffer*>(renderable->mesh->indexBuffer);
-                context->IASetIndexBuffer(indexBuffer, DXGI_FORMAT_R32_UINT, 0);
-            }
-            
-            // 设置拓扑结构
-            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            
-            // 绘制
-            if (renderable->mesh->indexBuffer && renderable->mesh->GetIndexCount() > 0) {
-                context->DrawIndexed(static_cast<UINT>(renderable->mesh->GetIndexCount()), 0, 0);
-                drawCount++;
-            } else {
-                context->Draw(static_cast<UINT>(renderable->mesh->GetVertices().size()), 0);
-                drawCount++;
-            }
-            continue;
-        }
-        
-        // ============================================
-        // MeshComponent Rendering (Textured Models)
-        // ============================================
-        // This is for models loaded via SceneAssetLoader (OBJ + textures)
-        // Uses shaders/textured.hlsl which supports albedo textures
-        // ============================================
-        
-        auto* meshComp = registry.try_get<components::MeshComponent>(entity);
-        if (meshComp && meshComp->mesh && meshComp->isVisible) {
-            // Create GPU buffers if needed
-            if (!meshComp->mesh->vertexBuffer) {
-                const_cast<resources::Mesh*>(meshComp->mesh.get())->CreateGPUBuffers(device);
-            }
-            if (!meshComp->mesh->vertexBuffer) {
-                if (s_firstRun) DebugManager::GetInstance().Log("DrawQueue", "Failed to create vertex buffer for mesh entity");
-                continue;
-            }
-            
-            // Get world matrix
-            DirectX::XMMATRIX worldMatrix = transform.GetWorldMatrix();
-            
-            // ============================================
-            // CRITICAL: Load textured shader for models with textures
-            // ============================================
-            // - Static variable ensures shader is loaded only once
-            // - Uses "textured.vs/ps" which loads shaders/textured.hlsl
-            // - This shader has Texture2D and SamplerState for textures
-            // ============================================
-            static std::shared_ptr<resources::Shader> s_texturedShader = nullptr;
-            if (!s_texturedShader) {
-                s_texturedShader = std::make_shared<resources::Shader>();
-                if (!s_texturedShader->LoadFromFile(device, "textured.vs", "textured.ps")) {
-                    DebugManager::GetInstance().Log("DrawQueue", "Failed to load textured shader");
-                    continue;
-                }
-            }
-            
-            // Bind textured shader (enables texture sampling in pixel shader)
-            s_texturedShader->Bind(context);
-            
-            // Update per-object constant buffer
-            if (s_perObjectCB) {
-                D3D11_MAPPED_SUBRESOURCE mapped;
-                if (SUCCEEDED(context->Map(s_perObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-                    DirectX::XMMATRIX worldTransposed = DirectX::XMMatrixTranspose(worldMatrix);
-                    memcpy(mapped.pData, &worldTransposed, sizeof(DirectX::XMMATRIX));
-                    context->Unmap(s_perObjectCB, 0);
-                }
-                context->VSSetConstantBuffers(1, 1, &s_perObjectCB);
-            }
-            
-            // Set vertex buffer
-            UINT stride = sizeof(resources::Vertex);
-            UINT offset = 0;
-            auto vertexBuffer = static_cast<ID3D11Buffer*>(meshComp->mesh->vertexBuffer);
-            context->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
-            
-            // Set index buffer
-            if (meshComp->mesh->indexBuffer) {
-                auto indexBuffer = static_cast<ID3D11Buffer*>(meshComp->mesh->indexBuffer);
-                context->IASetIndexBuffer(indexBuffer, DXGI_FORMAT_R32_UINT, 0);
-            }
-            
-            // Set topology
-            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            
-            // ============================================
-            // TEXTURE BINDING
-            // ============================================
-            // material->shaderProgram temporarily stores the texture SRV
-            // (In production, use a ResourceManager to avoid duplicates)
-            // Binds to register(t0) in HLSL shader
-            // ============================================
-            if (meshComp->material && meshComp->material->shaderProgram) {
-                auto textureSRV = static_cast<ID3D11ShaderResourceView*>(meshComp->material->shaderProgram);
-                context->PSSetShaderResources(0, 1, &textureSRV);  // Bind to t0
-                
-                // Set sampler state for texture filtering
-                static ID3D11SamplerState* s_samplerState = nullptr;
-                if (!s_samplerState) {
-                    D3D11_SAMPLER_DESC samplerDesc = {};
-                    samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-                    samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-                    samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-                    samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-                    samplerDesc.MaxAnisotropy = 1;
-                    samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-                    samplerDesc.MinLOD = 0;
-                    samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-                    device->CreateSamplerState(&samplerDesc, &s_samplerState);
-                }
-                if (s_samplerState) {
-                    context->PSSetSamplers(0, 1, &s_samplerState);
-                }
-            }
-            
-            // Draw
-            if (meshComp->mesh->indexBuffer && meshComp->mesh->GetIndexCount() > 0) {
-                context->DrawIndexed(static_cast<UINT>(meshComp->mesh->GetIndexCount()), 0, 0);
-                drawCount++;
-            } else {
-                context->Draw(static_cast<UINT>(meshComp->mesh->GetVertices().size()), 0);
-                drawCount++;
-            }
-        }
-    }
-    
-    if (s_firstRun) {
-        DebugManager::GetInstance().Log("DrawQueue", "Drew " + std::to_string(drawCount) + " entities from queue of " + std::to_string(queue.Size()));
-        s_firstRun = false;
-    }
 }
 
 } // namespace outer_wilds

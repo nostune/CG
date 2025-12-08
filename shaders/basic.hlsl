@@ -52,12 +52,12 @@ PS_INPUT VSMain(VS_INPUT input)
 // Pixel Shader
 float4 PSMain(PS_INPUT input) : SV_TARGET
 {
-    // Simple lighting
-    float3 lightDir = normalize(float3(0.5f, -1.0f, 0.3f));
+    // Simple lighting - 从上方和前方照射
+    float3 lightDir = normalize(float3(0.5f, 1.0f, 0.3f));  // 光从上方来(+Y方向)
     float3 normal = normalize(input.normal);
     
-    float diffuse = max(dot(normal, -lightDir), 0.0f);
-    float ambient = 0.3f;
+    float diffuse = max(dot(normal, lightDir), 0.0f);  // 修改为lightDir(不加负号)
+    float ambient = 0.5f;  // 增加环境光,确保背光面也可见
     
     float3 lighting = float3(ambient + diffuse, ambient + diffuse, ambient + diffuse);
     float3 finalColor = color.rgb * lighting;

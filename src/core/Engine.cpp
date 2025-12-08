@@ -69,9 +69,20 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 }
 
 void Engine::Run() {
+    std::cout << "[Engine::Run] IMMEDIATE: Starting main loop, m_Running=" << m_Running << std::endl;
+    std::cout << "[Engine::Run] IMMEDIATE: m_Systems.size()=" << m_Systems.size() << std::endl;
+    
+    int loopIterations = 0;
     while (m_Running) {
         MainLoop();
+        loopIterations++;
+        
+        // 每100次循环输出一次
+        if (loopIterations % 100 == 0) {
+            std::cout << "[Engine::Run] Loop iteration: " << loopIterations << std::endl;
+        }
     }
+    std::cout << "[Engine::Run] IMMEDIATE: Exited main loop after " << loopIterations << " iterations" << std::endl;
 }
 
 void Engine::Shutdown() {
@@ -80,26 +91,58 @@ void Engine::Shutdown() {
 }
 
 void Engine::MainLoop() {
+    static int loopCount = 0;
+    loopCount++;
+    if (loopCount <= 3) {
+        std::cout << "[Engine::MainLoop] IMMEDIATE: Loop iteration " << loopCount << std::endl;
+    }
+    
     MSG msg = {};
+    int msgCount = 0;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        msgCount++;
+        if (loopCount <= 3) {
+            std::cout << "[Engine::MainLoop] Message #" << msgCount << ": " << msg.message << std::endl;
+        }
+        
         TranslateMessage(&msg);
         DispatchMessage(&msg);
+        
         if (msg.message == WM_QUIT) {
+            std::cout << "[Engine::MainLoop] IMMEDIATE: Received WM_QUIT, stopping" << std::endl;
             m_Running = false;
         }
     }
 
-    if (!m_Running) return;
+    if (!m_Running) {
+        std::cout << "[Engine::MainLoop] IMMEDIATE: m_Running is FALSE, returning early" << std::endl;
+        return;
+    }
 
     TimeManager::GetInstance().Update();
     m_DeltaTime = TimeManager::GetInstance().GetDeltaTime();
 
+    if (loopCount <= 3) {
+        std::cout << "[Engine::MainLoop] About to call Update(), deltaTime=" << m_DeltaTime << std::endl;
+    }
+
     Update();
+    
+    if (loopCount <= 3) {
+        std::cout << "[Engine::MainLoop] Update() completed" << std::endl;
+    }
 }
 
 void Engine::Update() {
     if (!m_SceneManager || !m_SceneManager->GetActiveScene()) return;
     auto& registry = m_SceneManager->GetActiveScene()->GetRegistry();
+
+    // === DEBUG: 输出系统数量 ===
+    static int updateCount = 0;
+    if (updateCount++ < 3) {
+        std::cout << "[Engine::Update] IMMEDIATE: Called #" << updateCount 
+                  << ", systems count: " << m_Systems.size() << std::endl;
+    }
 
     // Update PhysX simulation
     PhysXManager::GetInstance().Update(m_DeltaTime);

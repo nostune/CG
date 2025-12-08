@@ -258,14 +258,16 @@ std::shared_ptr<Material> SceneAssetLoader::CreateMaterialResource(
             material->shaderProgram = textureSRV; // Temporary storage
             
             DebugManager::GetInstance().Log("SceneAssetLoader", 
-                "✅ Texture loaded successfully: " + texturePath);
+                "Texture loaded successfully: " + texturePath);
         } else {
             DebugManager::GetInstance().Log("SceneAssetLoader", 
-                "❌ Failed to load texture: " + texturePath + ", using default material");
+                "Failed to load texture: " + texturePath + ", using default material");
+            material->shaderProgram = nullptr;  // 明确标记无纹理
         }
     } else {
+        material->shaderProgram = nullptr;  // 明确标记无纹理
         DebugManager::GetInstance().Log("SceneAssetLoader", 
-            "⚠️ No texture path provided, using default white material");
+            "No texture path provided, using default white material");
     }
 
     return material;

@@ -69,12 +69,12 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
         texColor = input.color;  // 使用顶点颜色
     }
     
-    // Simple directional lighting
-    float3 lightDir = normalize(float3(0.5f, -1.0f, 0.3f));
+    // Simple directional lighting - 从上方和前方照射
+    float3 lightDir = normalize(float3(0.5f, 1.0f, 0.3f));  // 光从上方来(+Y方向)
     float3 normal = normalize(input.normal);
     
-    float diffuse = max(dot(normal, -lightDir), 0.2f);  // Min 0.2 ambient
-    float ambient = 0.4f;
+    float diffuse = max(dot(normal, lightDir), 0.0f);  // 修改为lightDir
+    float ambient = 0.5f;  // 增加环境光
     
     float lighting = saturate(ambient + diffuse);
     

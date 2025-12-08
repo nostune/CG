@@ -13,6 +13,11 @@ public:
     bool LoadFromFile(ID3D11Device* device, const std::string& vertexPath, const std::string& pixelPath);
     void Bind(ID3D11DeviceContext* context) const;
     void Unbind(ID3D11DeviceContext* context) const;
+    
+    // === v0.3.0: 访问器（用于RenderQueue） ===
+    ID3D11VertexShader* GetVertexShader() const { return vertexShader; }
+    ID3D11PixelShader* GetPixelShader() const { return pixelShader; }
+    ID3D11InputLayout* GetInputLayout() const { return inputLayout; }
 
 private:
     bool LoadEmbeddedGridShader(ID3D11Device* device);
