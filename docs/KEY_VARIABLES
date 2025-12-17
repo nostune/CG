@@ -1,44 +1,263 @@
-### Transform 相关
-| 变量 | 类型 | 含义 | 范围 |
-|------|------|------|------|
-| `position` | XMFLOAT3 | 世界坐标 | (-∞, ∞) |
-| `rotation` | XMFLOAT4 | 四元数旋转 | 单位四元数 |
-| `scale` | XMFLOAT3 | 缩放 | (0, ∞) |
+# OuterWilds ECS - 组件变量参考手册
 
-### Render Priority 相关
+## 核心组件 (Core Components)
+
+### TransformComponent
+世界空间变换组件 - 所有可见实体的基础组件
+
+| 变量 | 类型 | 含义 | 范围 | 默认值 |
+|------|------|------|------|--------|
+| `position` | XMFLOAT3 | 世界坐标 | (-∞, ∞) | {0, 0, 0} |
+| `rotation` | XMFLOAT4 | 四元数旋转 | 单位四元数 | {0, 0, 0, 1} |
+| `scale` | XMFLOAT3 | 缩放 | (0, ∞) | {1, 1, 1} |
+
+**方法**: `GetWorldMatrix()` - 计算世界变换矩阵
+
+---
+
+## 渲染组件 (Graphics Components)
+
+### MeshComponent
+网格渲染组件 - 定义实体的几何体和材质
+
+| 变量 | 类型 | 含义 | 默认值 |
+|------|------|------|--------|
+| `mesh` | shared_ptr<Mesh> | 网格资源 | nullptr |
+| `material` | shared_ptr<Material> | 材质资源 | nullptr |
+| `isVisible` | bool | 是否可见 | true |
+| `castsShadows` | bool | 投射阴影 | true |
+| `receiveShadows` | bool | 接收阴影 | true |
+
+### RenderPriorityComponent
+渲染优先级组件 - 控制渲染顺序和剔除
+
 | 变量 | 类型 | 含义 | 典型值 |
 |------|------|------|--------|
-| `sortKey` | uint32_t | 排序键 | 0-65535 |
-| `renderPass` | int | 渲染通道 | 0=Opaque, 1=Transparent |
-| `distanceToCamera` | float | 到相机距离 | 自动计算 |
-| `lodLevel` | int | LOD级别 | 0=最高, 1=中, 2=低 |
-| `visible` | bool | 是否可见 | true/false |
+| `sortKey` | uint32_t | 排序键(Shader+Material+Depth) | 0-0xFFFFFFFF |
+| `renderPass` | uint8_t | 渲染通道 | 0=不透明, 1=透明 |
+| `lodLevel` | uint8_t | LOD级别 | 0=高, 1=中, 2=低 |
+| `visible` | bool | 可见性标记 | true/false |
 | `castShadow` | bool | 投射阴影 | true/false |
 | `receiveShadow` | bool | 接收阴影 | true/false |
+| `distanceToCamera` | float | 到相机距离 | 自动计算 |
 
-### Camera 相关
+**方法**: `CalculateSortKey(shaderId, materialId, depth)` - 计算排序键
+
+### CameraComponent
+相机组件 - 定义观察视角(玩家第一人称)
+
 | 变量 | 类型 | 含义 | 典型值 |
 |------|------|------|--------|
-| `position` | XMFLOAT3 | 相机位置 | 角色位置+眼高 |
-| `target` | XMFLOAT3 | 看向位置 | 根据yaw/pitch计算 |
-| `yaw` | float | 水平旋转角 | 0-2π (弧度) |
-| `pitch` | float | 俯仰角 | -π/2 ~ π/2 |
-| `fov` | float | 视野角度 | 60-90 (度) |
+| `position` | XMFLOAT3 | 相机位置 | 玩家位置+眼高 |
+| `target` | XMFLOAT3 | 看向位置 | 计算得出 |
+| `up` | XMFLOAT3 | 上方向 | {0, 1, 0} |
+| `fov` | float | 视野角度(度) | 75.0 |
 | `aspectRatio` | float | 宽高比 | 16/9 = 1.778 |
 | `nearPlane` | float | 近裁剪面 | 0.1 |
 | `farPlane` | float | 远裁剪面 | 1000.0 |
-| `lookSensitivity` | float | 鼠标灵敏度 | 0.001-0.01 |
+| `isActive` | bool | 是否激活 | true |
+| `lookSensitivity` | float | 鼠标灵敏度 | 0.002 |
 
-### Character Controller 相关
+**球面重力专用(局部坐标系)**:
+| 变量 | 类型 | 含义 | 说明 |
+|------|------|------|------|
+| `localUp` | XMFLOAT3 | 局部上方向 | 重力反方向 |
+| `localForward` | XMFLOAT3 | 局部前方向 | 切平面参考 |
+| `localRight` | XMFLOAT3 | 局部右方向 | 切平面参考 |
+| `relativeYaw` | float | 相对水平旋转(弧度) | 0-2π |
+| `relativePitch` | float | 相对俯仰角(弧度) | -π/2~π/2 |
+
+⚠️ **已废弃**: `yaw`, `pitch` (仅用于世界坐标系,球面重力下使用relative版本)
+
+### FreeCameraComponent
+自由相机组件 - 调试用无物理约束相机
+
 | 变量 | 类型 | 含义 | 典型值 |
 |------|------|------|--------|
+| `position` | XMFLOAT3 | 相机位置 | 玩家位置(切换时) |
+| `yaw` | float | 水平旋转(弧度) | 0-2π |
+| `pitch` | float | 垂直旋转(弧度) | -π/2~π/2 |
+| `moveSpeed` | float | 移动速度 | 15.0 m/s |
+| `sprintMultiplier` | float | Shift加速倍数 | 3.0 |
+| `lookSensitivity` | float | 视角灵敏度 | 0.002 |
+| `isActive` | bool | 是否激活 | false |
+
+---
+
+## 物理组件 (Physics Components)
+
+### CharacterControllerComponent
+角色控制器组件 - 玩家移动控制(PhysX)
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `controller` | PxController* | PhysX控制器 | 运行时创建 |
 | `moveSpeed` | float | 移动速度 | 5.0 m/s |
 | `jumpSpeed` | float | 跳跃初速度 | 8.0 m/s |
 | `gravity` | float | 重力加速度 | -20.0 m/s² |
 | `verticalVelocity` | float | 当前垂直速度 | 动态计算 |
 | `isGrounded` | bool | 是否在地面 | 碰撞检测 |
-| `forwardInput` | float | 前后输入 | -1 ~ 1 (W/S) |
-| `rightInput` | float | 左右输入 | -1 ~ 1 (A/D) |
+| `forwardInput` | float | 前后输入 | -1~1 (S/W) |
+| `rightInput` | float | 左右输入 | -1~1 (A/D) |
+| `wantsToJump` | bool | 跳跃请求 | 空格键 |
+
+### RigidBodyComponent
+刚体组件 - PhysX物理模拟
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `physxActor` | PxRigidActor* | PhysX刚体句柄 | 运行时创建 |
+| `mass` | float | 质量(kg) | 1.0 |
+| `drag` | float | 线性阻尼 | 0.0 |
+| `angularDrag` | float | 角阻尼 | 0.05 |
+| `velocity` | XMFLOAT3 | 线速度 | 动态计算 |
+| `angularVelocity` | XMFLOAT3 | 角速度 | 动态计算 |
+| `useGravity` | bool | 受重力影响 | true |
+| `isKinematic` | bool | 运动学模式 | false |
+
+### ColliderComponent
+碰撞体组件 - 定义物理形状
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `type` | ColliderType | 碰撞体类型 | Box/Sphere/Capsule/Mesh |
+| `boxExtent` | XMFLOAT3 | 盒体半尺寸 | {0.5, 0.5, 0.5} |
+| `sphereRadius` | float | 球体半径 | 0.5 |
+| `capsuleRadius` | float | 胶囊体半径 | 0.5 |
+| `capsuleHeight` | float | 胶囊体高度 | 1.0 |
+| `centerOffset` | XMFLOAT3 | 中心偏移 | {0, 0, 0} |
+| `isTrigger` | bool | 触发器模式 | false |
+
+### GravitySourceComponent
+重力源组件 - 定义天体重力场
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `radius` | float | 星球半径(m) | 64.0 (地球) |
+| `surfaceGravity` | float | 表面重力(m/s²) | 9.8 (地球) |
+| `atmosphereHeight` | float | 大气层高度(m) | 20.0 |
+| `mass` | float | 质量(kg) | 1000.0 |
+| `useRealisticGravity` | bool | 真实重力衰减 | false (推荐) |
+| `isActive` | bool | 是否激活 | true |
+
+**方法**:
+- `GetInfluenceRadius()` - 总影响半径(radius + atmosphereHeight)
+- `CalculateGravityStrength(distance)` - 计算指定距离的重力强度
+
+### GravityAffectedComponent
+受重力影响组件 - 附加到玩家/动态物体
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `affectedByGravity` | bool | 是否受重力 | true |
+| `gravityScale` | float | 重力缩放 | 1.0 (正常) |
+| `currentGravitySource` | Entity | 当前重力源 | 最近星球 |
+| `currentGravityDir` | XMFLOAT3 | 重力方向(归一化) | 指向星球中心 |
+| `currentGravityStrength` | float | 重力强度(m/s²) | 动态计算 |
+| `previousGravitySource` | Entity | 上一帧重力源 | 检测切换 |
+| `transitionProgress` | float | 切换过渡进度 | 0-1 |
+
+### PlayerAlignmentComponent
+玩家对齐组件 - 控制球面行走姿态
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `alignmentSpeed` | float | 对齐速度(弧度/秒) | 5.0 |
+| `autoAlign` | bool | 自动对齐 | true |
+| `lockRoll` | bool | 锁定翻滚 | true (推荐) |
+| `preserveForward` | bool | 保持前方向 | true |
+| `alignmentDeadZone` | float | 死区角度(度) | 2.0 |
+
+---
+
+## 游戏玩法组件 (Gameplay Components)
+
+### PlayerInputComponent
+玩家输入组件 - 输入状态存储
+
+| 变量 | 类型 | 含义 | 范围 |
+|------|------|------|------|
+| `moveInput` | XMFLOAT2 | 移动输入 | x:A/D, y:W/S (-1~1) |
+| `lookInput` | XMFLOAT2 | 视角输入 | 鼠标增量 |
+| `jumpPressed` | bool | 跳跃按下 | 本帧按下 |
+| `jumpHeld` | bool | 跳跃按住 | 持续按住 |
+| `sprintHeld` | bool | 冲刺按住 | Shift键 |
+| `crouchHeld` | bool | 蹲伏按住 | Ctrl键 |
+| `interactPressed` | bool | 交互按下 | E键 |
+| `mouseLookEnabled` | bool | 鼠标视角 | true |
+
+### PlayerComponent
+玩家组件 - 玩家属性
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `moveSpeed` | float | 移动速度 | 5.0 m/s |
+| `sprintMultiplier` | float | 冲刺倍数 | 1.5 |
+| `jumpForce` | float | 跳跃力 | 5.0 |
+| `lookSensitivity` | float | 视角灵敏度 | 1.0 |
+| `isGrounded` | bool | 是否着地 | 碰撞检测 |
+| `cameraEntity` | Entity | 相机实体 | entt::null |
+| `visualModelEntity` | Entity | 可视模型实体 | 第三人称用 |
+
+### OrbitComponent
+轨道运动组件 - 天体公转
+
+| 变量 | 类型 | 含义 | 典型值 |
+|------|------|------|--------|
+| `centerEntity` | Entity | 轨道中心实体 | 地球 |
+| `radius` | float | 轨道半径(m) | 8.0 (月球) |
+| `period` | float | 轨道周期(秒) | 30.0 (月球) |
+| `orbitNormal` | XMFLOAT3 | 轨道平面法线 | {0, 1, 0} (XZ平面) |
+| `currentAngle` | float | 当前角度(弧度) | 0-2π |
+| `isActive` | bool | 是否激活 | true |
+
+**方法**: `GetAngularVelocity()` - 计算角速度(2π/period)
+
+---
+
+## 系统架构说明
+
+### ECS系统执行顺序
+```
+1. OrbitSystem       - 更新天体轨道位置
+2. PhysicsSystem     - PhysX物理模拟
+3. GravitySystem     - 计算重力场
+4. PlayerAlignmentSystem - 球面姿态对齐
+5. PlayerSystem      - 玩家移动控制
+6. CameraModeSystem  - 相机模式切换
+7. FreeCameraSystem  - 自由相机控制
+8. RenderSystem      - 渲染提交
+```
+
+### Shader加载机制 (重要!)
+
+**文件结构**:
+```
+shaders/
+  ├── basic.hlsl      - 基础着色器(无纹理)
+  └── textured.hlsl   - 纹理着色器(带纹理)
+```
+
+**加载流程**:
+1. RenderQueue调用: `GetOrLoadShader("textured.vs", "textured.ps", device)`
+2. Shader::LoadFromFile解析参数:
+   - 去掉`.vs`/`.ps`后缀 → `textured`
+   - 拼接路径 → `shaders/textured.hlsl`
+3. D3DCompile编译HLSL文件:
+   - 顶点着色器入口: `VSMain`
+   - 像素着色器入口: `PSMain`
+4. 创建D3D11对象并缓存
+
+⚠️ **迁移注意事项**:
+- **必须复制`shaders/`目录**到新机器
+- 运行目录必须包含`shaders/*.hlsl`文件
+- 不需要`.vs`/`.ps`文件(仅为虚拟扩展名)
+- HLSL文件在运行时编译(需要D3DCompiler_47.dll)
+
+**错误诊断**:
+- "Failed to load shader: textured.vs|textured.ps" → 缺少`shaders/textured.hlsl`
+- "Failed to open HLSL file" → 工作目录错误或文件缺失
+- 检查运行目录: 应该是项目根目录(包含shaders/文件夹)
 
 ### PhysX 相关
 | 变量 | 类型 | 含义 | 典型值 |

@@ -3,6 +3,7 @@
 #include <vector>
 #include <iostream>
 #include <chrono>
+#include "TimeManager.h"
 
 namespace outer_wilds {
 
@@ -29,6 +30,9 @@ public:
             m_TimeAccumulator = 0.0f;
         }
     }
+    
+    void SetShowFPS(bool show) { m_ShowFPS = show; }
+    bool IsShowingFPS() const { return m_ShowFPS; }
 
     void ForcePrint() {
         PrintAllMessages();
@@ -47,8 +51,17 @@ private:
     DebugManager& operator=(const DebugManager&) = delete;
 
     void PrintAllMessages() {
-        if (!m_DebugMessages.empty()) {
+        if (!m_DebugMessages.empty() || m_ShowFPS) {
             std::cout << "\n=== Debug Info ===" << std::endl;
+            
+            // 显示FPS
+            if (m_ShowFPS) {
+                float fps = TimeManager::GetInstance().GetFPS();
+                std::cout << "[FPS] " << static_cast<int>(fps) << " fps (" 
+                          << (1000.0f / fps) << " ms/frame)" << std::endl;
+            }
+            
+            // 显示其他消息
             for (const auto& message : m_DebugMessages) {
                 std::cout << message << std::endl;
             }
@@ -59,6 +72,7 @@ private:
     std::vector<std::string> m_DebugMessages;
     float m_TimeAccumulator = 0.0f;
     float m_DebugInterval = 2.0f; // 每2秒输出一次
+    bool m_ShowFPS = false;
 };
 
 } // namespace outer_wilds

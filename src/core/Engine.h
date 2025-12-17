@@ -14,6 +14,7 @@ class GravitySystem;
 class PlayerAlignmentSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
+class OrbitSystem;
 
 class Engine {
 public:
@@ -60,6 +61,7 @@ private:
     std::shared_ptr<PlayerAlignmentSystem> m_PlayerAlignmentSystem;
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
+    std::shared_ptr<OrbitSystem> m_OrbitSystem;
 
     // Common resources
     std::shared_ptr<resources::Mesh> m_PlanetMesh;

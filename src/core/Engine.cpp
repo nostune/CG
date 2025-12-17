@@ -6,6 +6,7 @@
 #include "../physics/GravitySystem.h"
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
+#include "../gameplay/OrbitSystem.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
 #include "../input/InputManager.h"
@@ -46,6 +47,9 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PhysicsSystem = AddSystem<PhysicsSystem>();
     m_PhysicsSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 轨道系统（在PhysicsSystem之前，更新天体位置）
+    m_OrbitSystem = AddSystem<OrbitSystem>();
 
     // 重力系统（在PhysicsSystem之前，用于计算重力）
     m_GravitySystem = AddSystem<GravitySystem>();

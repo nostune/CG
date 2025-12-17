@@ -97,9 +97,25 @@ void CameraModeSystem::CreateFreeCameraEntity(entt::registry& registry) {
     // 创建自由相机实体
     m_FreeCameraEntity = registry.create();
     
-    // 添加Transform
+    // 获取玩家当前位置和朝向
+    DirectX::XMFLOAT3 playerPos = {0, 0, 0};
+    float playerYaw = 0.0f;
+    float playerPitch = 0.0f;
+    
+    // 使用PlayerInputComponent查找玩家实体
+    auto playerView = registry.view<PlayerInputComponent, TransformComponent, CameraComponent>();
+    for (auto entity : playerView) {
+        auto& transform = registry.get<TransformComponent>(entity);
+        auto& camera = registry.get<CameraComponent>(entity);
+        playerPos = transform.position;
+        playerYaw = camera.yaw;
+        playerPitch = camera.pitch;
+        break;
+    }
+    
+    // 添加Transform - 初始位置从玩家位置创建
     auto& transform = registry.emplace<TransformComponent>(m_FreeCameraEntity);
-    transform.position = {0, 5, 0};
+    transform.position = playerPos;
     transform.rotation = {0, 0, 0, 1};
     
     // 添加CameraComponent
@@ -109,14 +125,14 @@ void CameraModeSystem::CreateFreeCameraEntity(entt::registry& registry) {
     camera.aspectRatio = 16.0f / 9.0f;
     camera.nearPlane = 0.1f;
     camera.farPlane = 1000.0f;
-    camera.yaw = 0.0f;
-    camera.pitch = 0.0f;
+    camera.yaw = playerYaw;
+    camera.pitch = playerPitch;
     
     // 添加FreeCameraComponent
     auto& freeCamera = registry.emplace<FreeCameraComponent>(m_FreeCameraEntity);
-    freeCamera.position = {0, 5, 0};
-    freeCamera.yaw = 0.0f;
-    freeCamera.pitch = 0.0f;
+    freeCamera.position = playerPos;
+    freeCamera.yaw = playerYaw;
+    freeCamera.pitch = playerPitch;
     freeCamera.moveSpeed = 15.0f;
     freeCamera.sprintMultiplier = 3.0f;
     freeCamera.lookSensitivity = 0.003f;

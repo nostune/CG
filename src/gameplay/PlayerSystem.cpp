@@ -98,6 +98,12 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
             if (DirectX::XMVectorGetX(DirectX::XMVector3Length(gravityDir)) < 0.001f) {
                 gravityDir = DirectX::XMVectorSet(0, -1, 0, 0);
             }
+            
+            // 关键修改：每帧更新CharacterController的up方向以匹配重力
+            DirectX::XMFLOAT3 upDirF;
+            DirectX::XMStoreFloat3(&upDirF, DirectX::XMVectorNegate(gravityDir));
+            physx::PxVec3 pxUp(upDirF.x, upDirF.y, upDirF.z);
+            character.controller->setUpDirection(pxUp);
             gravityDir = DirectX::XMVector3Normalize(gravityDir);
             localUp = DirectX::XMVectorNegate(gravityDir);
             
@@ -169,9 +175,18 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         
         DirectX::XMVECTOR horizontalVelocity = DirectX::XMVectorScale(moveDir, character.moveSpeed);
         
+        // Get current foot position for ground detection
+        physx::PxExtendedVec3 pxFootPos = character.controller->getFootPosition();
+        DirectX::XMVECTOR footPos = DirectX::XMVectorSet((float)pxFootPos.x, (float)pxFootPos.y, (float)pxFootPos.z, 0.0f);
+        
         // Handle jumping and gravity
         float gravityStrength = (gravity && gravity->affectedByGravity) ? 
             gravity->currentGravityStrength * gravity->gravityScale : 20.0f;
+        
+        // 使用PhysX原生接地检测（现在up方向已正确设置）
+        physx::PxControllerState state;
+        character.controller->getState(state);
+        character.isGrounded = (state.collisionFlags & physx::PxControllerCollisionFlag::eCOLLISION_DOWN) != 0;
         
         if (character.wantsToJump && character.isGrounded) {
             character.verticalVelocity = character.jumpSpeed;
@@ -186,9 +201,10 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
             }
         }
         
-        // Combine horizontal and vertical movement (使用localUp方向)
+        // 组合水平和垂直速度（CharacterController会自动处理碰撞）
         DirectX::XMVECTOR verticalVelocity = DirectX::XMVectorScale(localUp, character.verticalVelocity);
         DirectX::XMVECTOR totalVelocity = DirectX::XMVectorAdd(horizontalVelocity, verticalVelocity);
+        
         DirectX::XMVECTOR displacementVec = DirectX::XMVectorScale(totalVelocity, deltaTime);
         
         DirectX::XMFLOAT3 disp;
@@ -199,14 +215,12 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         physx::PxControllerFilters filters;
         character.controller->move(displacement, 0.0001f, deltaTime, filters);
         
-        // Update grounded state
-        physx::PxControllerState state;
-        character.controller->getState(state);
-        character.isGrounded = (state.collisionFlags & physx::PxControllerCollisionFlag::eCOLLISION_DOWN) != 0;
+        // Note: isGrounded is now set by custom raycast ground detection above
+        // (Removed PhysX's world-space collision detection as it fails on spherical surfaces)
         
-        // Update transform to match controller position
+        // Re-query foot position after move (it may have changed)
         physx::PxExtendedVec3 pos = character.controller->getFootPosition();
-        DirectX::XMVECTOR footPos = DirectX::XMVectorSet((float)pos.x, (float)pos.y, (float)pos.z, 0.0f);
+        footPos = DirectX::XMVectorSet((float)pos.x, (float)pos.y, (float)pos.z, 0.0f);
         
         // 眼睛位置 = 脚位置 + localUp方向偏移
         DirectX::XMVECTOR eyePos = DirectX::XMVectorAdd(footPos, DirectX::XMVectorScale(localUp, 0.9f));

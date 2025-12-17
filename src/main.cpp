@@ -12,6 +12,8 @@
 #include "gameplay/components/PlayerComponent.h"
 #include "gameplay/components/PlayerAlignmentComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
+#include "gameplay/components/OrbitComponent.h"
+#include "gameplay/OrbitSystem.h"
 #include "physics/components/GravitySourceComponent.h"
 #include "physics/components/GravityAffectedComponent.h"
 #include "physics/components/RigidBodyComponent.h"
@@ -108,6 +110,10 @@ int main(int argc, char* argv[]) {
     
     if (engine.Initialize(hwnd, WINDOW_WIDTH, WINDOW_HEIGHT)) {
         outer_wilds::DebugManager::GetInstance().Log("Main", "Engine initialized successfully");
+        
+        // 启用FPS显示
+        outer_wilds::DebugManager::GetInstance().SetShowFPS(true);
+        
         // Get the default scene
         auto scene = engine.GetSceneManager()->GetActiveScene();
 
@@ -442,142 +448,66 @@ int main(int argc, char* argv[]) {
         outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
         
         // ========================================
-        // 创建参考网格立方体（调试用）
+        // 创建月球(地球卫星)
         // ========================================
-        // 创建一个包裹星球的大立方体，用于可视化调试相机旋转问题
-        auto debugCubeMesh = std::make_shared<outer_wilds::resources::Mesh>();
-        std::vector<outer_wilds::resources::Vertex> cubeVertices;
-        std::vector<uint32_t> cubeIndices;
+        const float MOON_ORBIT_RADIUS = 90.0f;   // 轨道半径 8m
+        const float MOON_RADIUS = 1.5f;         // 月球半径 1.5m
+        const float MOON_SCALE = MOON_RADIUS / PLANET_MODEL_RADIUS; // 基于planet1.obj缩放
         
-        // 立方体尺寸：略大于星球直径（64m半径 * 2 = 128m，使用150m立方体）
-        const float cubeSize = 150.0f;
-        const float h = cubeSize * 0.5f; // 半边长
+        // 月球初始位置:在地球右侧
+        DirectX::XMFLOAT3 moonPosition = {MOON_ORBIT_RADIUS, 0.0f, 0.0f};
         
-        // 定义8个顶点（立方体的8个角）
-        DirectX::XMFLOAT3 corners[8] = {
-            {-h, -h, -h}, // 0: left-bottom-back
-            { h, -h, -h}, // 1: right-bottom-back
-            { h,  h, -h}, // 2: right-top-back
-            {-h,  h, -h}, // 3: left-top-back
-            {-h, -h,  h}, // 4: left-bottom-front
-            { h, -h,  h}, // 5: right-bottom-front
-            { h,  h,  h}, // 6: right-top-front
-            {-h,  h,  h}  // 7: left-top-front
-        };
+        std::stringstream moonLog;
+        moonLog << "Creating Moon: orbit_radius=" << MOON_ORBIT_RADIUS 
+                << "m, moon_radius=" << MOON_RADIUS << "m, scale=" << MOON_SCALE;
+        outer_wilds::DebugManager::GetInstance().Log("Main", moonLog.str());
         
-        // 创建网格线（每个面上画网格）
-        // 每个面分成10x10的网格
-        const int gridDivisions = 10;
-        const float gridStep = cubeSize / gridDivisions;
+        // 创建月球物理配置
+        outer_wilds::PhysicsOptions moonPhysics;
+        moonPhysics.addCollider = true;
+        moonPhysics.addRigidBody = true;
+        moonPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
+        moonPhysics.sphereRadius = PLANET_MODEL_RADIUS;
+        moonPhysics.mass = 0.0f;
+        moonPhysics.useGravity = false;
+        moonPhysics.isKinematic = true;
+        moonPhysics.staticFriction = 0.8f;
+        moonPhysics.dynamicFriction = 0.6f;
+        moonPhysics.restitution = 0.2f;
         
-        // 为了简化，只渲染立方体的边框线（12条边）
-        // 使用线段渲染，这里我们用三角形模拟细线
-        DirectX::XMFLOAT3 cubeNormals[6] = {
-            {0, 0, -1}, // back
-            {0, 0, 1},  // front
-            {-1, 0, 0}, // left
-            {1, 0, 0},  // right
-            {0, -1, 0}, // bottom
-            {0, 1, 0}   // top
-        };
-        
-        // 创建6个面，每个面使用网格纹理坐标
-        // 简化版本：创建一个大立方体框架（只显示边线）
-        
-        // Back face (Z = -h)
-        cubeVertices.push_back({{-h, -h, -h}, {0, 0, -1}, {0, 0}});
-        cubeVertices.push_back({{ h, -h, -h}, {0, 0, -1}, {1, 0}});
-        cubeVertices.push_back({{ h,  h, -h}, {0, 0, -1}, {1, 1}});
-        cubeVertices.push_back({{-h,  h, -h}, {0, 0, -1}, {0, 1}});
-        
-        // Front face (Z = h)
-        cubeVertices.push_back({{ h, -h,  h}, {0, 0, 1}, {0, 0}});
-        cubeVertices.push_back({{-h, -h,  h}, {0, 0, 1}, {1, 0}});
-        cubeVertices.push_back({{-h,  h,  h}, {0, 0, 1}, {1, 1}});
-        cubeVertices.push_back({{ h,  h,  h}, {0, 0, 1}, {0, 1}});
-        
-        // Left face (X = -h)
-        cubeVertices.push_back({{-h, -h,  h}, {-1, 0, 0}, {0, 0}});
-        cubeVertices.push_back({{-h, -h, -h}, {-1, 0, 0}, {1, 0}});
-        cubeVertices.push_back({{-h,  h, -h}, {-1, 0, 0}, {1, 1}});
-        cubeVertices.push_back({{-h,  h,  h}, {-1, 0, 0}, {0, 1}});
-        
-        // Right face (X = h)
-        cubeVertices.push_back({{ h, -h, -h}, {1, 0, 0}, {0, 0}});
-        cubeVertices.push_back({{ h, -h,  h}, {1, 0, 0}, {1, 0}});
-        cubeVertices.push_back({{ h,  h,  h}, {1, 0, 0}, {1, 1}});
-        cubeVertices.push_back({{ h,  h, -h}, {1, 0, 0}, {0, 1}});
-        
-        // Bottom face (Y = -h)
-        cubeVertices.push_back({{-h, -h,  h}, {0, -1, 0}, {0, 0}});
-        cubeVertices.push_back({{ h, -h,  h}, {0, -1, 0}, {1, 0}});
-        cubeVertices.push_back({{ h, -h, -h}, {0, -1, 0}, {1, 1}});
-        cubeVertices.push_back({{-h, -h, -h}, {0, -1, 0}, {0, 1}});
-        
-        // Top face (Y = h)
-        cubeVertices.push_back({{-h,  h, -h}, {0, 1, 0}, {0, 0}});
-        cubeVertices.push_back({{ h,  h, -h}, {0, 1, 0}, {1, 0}});
-        cubeVertices.push_back({{ h,  h,  h}, {0, 1, 0}, {1, 1}});
-        cubeVertices.push_back({{-h,  h,  h}, {0, 1, 0}, {0, 1}});
-        
-        // 创建索引（每个面2个三角形）
-        for (uint32_t i = 0; i < 6; i++) {
-            uint32_t base = i * 4;
-            cubeIndices.push_back(base + 0);
-            cubeIndices.push_back(base + 1);
-            cubeIndices.push_back(base + 2);
-            cubeIndices.push_back(base + 0);
-            cubeIndices.push_back(base + 2);
-            cubeIndices.push_back(base + 3);
-        }
-        
-        debugCubeMesh->SetVertices(cubeVertices);
-        debugCubeMesh->SetIndices(cubeIndices);
-        
-        // 创建GPU缓冲区
-        debugCubeMesh->CreateGPUBuffers(engine.GetRenderSystem()->GetBackend()->GetDevice());
-        
-        // 创建带纹理的材质
-        auto debugCubeMaterial = std::make_shared<outer_wilds::resources::Material>();
-        debugCubeMaterial->albedo = {1.0f, 1.0f, 1.0f, 0.5f}; // 半透明白色
-        debugCubeMaterial->metallic = 0.0f;
-        debugCubeMaterial->roughness = 1.0f;
-        debugCubeMaterial->ao = 1.0f;
-        debugCubeMaterial->isTransparent = true;
-        
-        // 加载纹理
-        ID3D11ShaderResourceView* cubeSRV = nullptr;
-        if (outer_wilds::resources::TextureLoader::LoadFromFile(
+        // 使用相同的星球模型和纹理
+        entt::entity moonEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+            scene->GetRegistry(),
+            scene,
             engine.GetRenderSystem()->GetBackend()->GetDevice(),
-            "assets/Texture/plastered_stone_wall_disp_2k.png",
-            &cubeSRV)) {
-            debugCubeMaterial->shaderProgram = cubeSRV;
-            debugCubeMaterial->albedoTexture = "assets/Texture/plastered_stone_wall_disp_2k.png";
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Debug cube texture loaded");
+            "assets/BlendObj/planet1.obj",
+            "assets/Texture/plastered_stone_wall_diff_2k.jpg",
+            moonPosition,
+            DirectX::XMFLOAT3(MOON_SCALE, MOON_SCALE, MOON_SCALE),
+            &moonPhysics
+        );
+        
+        if (moonEntity != entt::null) {
+            // 添加月球的重力源(较弱)
+            auto& moonGravitySource = scene->GetRegistry().emplace<outer_wilds::components::GravitySourceComponent>(moonEntity);
+            moonGravitySource.radius = MOON_RADIUS;
+            moonGravitySource.surfaceGravity = 1.62f;  // 月球真实重力约为地球的1/6
+            moonGravitySource.atmosphereHeight = 1.5f;  // 影响范围3m
+            moonGravitySource.useRealisticGravity = false;
+            moonGravitySource.isActive = true;
+            
+            // 添加轨道组件 - 让月球围绕地球公转
+            auto& moonOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(moonEntity);
+            moonOrbit.centerEntity = planetEntity;  // 围绕地球
+            moonOrbit.radius = MOON_ORBIT_RADIUS;
+            moonOrbit.period = 30.0f;  // 30秒公转一圈（方便观察）
+            moonOrbit.currentAngle = 0.0f;  // 从正X轴开始
+            moonOrbit.isActive = true;
+            
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Moon created successfully with orbit");
         } else {
-            debugCubeMaterial->shaderProgram = nullptr;
-            debugCubeMaterial->albedoTexture = "";
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load debug cube texture");
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load moon model");
         }
-        
-        auto debugCubeEntity = scene->CreateEntity("debug_cube");
-        auto& debugCubeTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(debugCubeEntity);
-        debugCubeTransform.position = {0.0f, 0.0f, 0.0f};
-        debugCubeTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
-        debugCubeTransform.scale = {1.0f, 1.0f, 1.0f};
-        
-        auto& debugCubeMeshComp = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(debugCubeEntity);
-        debugCubeMeshComp.mesh = debugCubeMesh;
-        debugCubeMeshComp.material = debugCubeMaterial;
-        debugCubeMeshComp.isVisible = true;
-        debugCubeMeshComp.castsShadows = false;
-        
-        auto& debugCubePriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(debugCubeEntity);
-        debugCubePriority.renderPass = 1;  // Transparent pass
-        debugCubePriority.sortKey = 200;   // 最后渲染
-        debugCubePriority.lodLevel = 0;
-        
-        outer_wilds::DebugManager::GetInstance().Log("Main", "Debug reference cube created (150m)");
         
         // ========================================
         // 输出完整的启动日志
