@@ -28,7 +28,13 @@ struct RenderBatch {
     // === GPU资源句柄 ===
     ID3D11Buffer* vertexBuffer = nullptr;
     ID3D11Buffer* indexBuffer = nullptr;
-    ID3D11ShaderResourceView* texture = nullptr;
+    
+    // PBR Multi-texture support
+    ID3D11ShaderResourceView* albedoTexture = nullptr;
+    ID3D11ShaderResourceView* normalTexture = nullptr;
+    ID3D11ShaderResourceView* metallicTexture = nullptr;
+    ID3D11ShaderResourceView* roughnessTexture = nullptr;
+    
     ID3D11SamplerState* sampler = nullptr;
     
     ID3D11VertexShader* vertexShader = nullptr;

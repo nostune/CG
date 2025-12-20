@@ -22,8 +22,14 @@ public:
     
     bool isTransparent = false;
     
-    // Shader resource handles (to be filled by renderer)
-    void* shaderProgram = nullptr;
+    // GPU Texture resource handles (PBR workflow)
+    void* albedoTextureSRV = nullptr;      // ID3D11ShaderResourceView* for albedo/diffuse map
+    void* normalTextureSRV = nullptr;      // ID3D11ShaderResourceView* for normal map
+    void* metallicTextureSRV = nullptr;    // ID3D11ShaderResourceView* for metallic map
+    void* roughnessTextureSRV = nullptr;   // ID3D11ShaderResourceView* for roughness map
+    
+    // Deprecated: Use specific texture SRVs above instead
+    void* shaderProgram = nullptr;  // Kept for backward compatibility
 };
 
 } // namespace resources

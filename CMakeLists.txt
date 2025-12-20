@@ -44,6 +44,10 @@ target_link_libraries(OuterWildsECS PRIVATE EnTT::EnTT)
 find_package(unofficial-omniverse-physx-sdk CONFIG REQUIRED)
 target_link_libraries(OuterWildsECS PRIVATE unofficial::omniverse-physx-sdk::sdk)
 
+# Find Assimp
+find_package(assimp CONFIG REQUIRED)
+target_link_libraries(OuterWildsECS PRIVATE assimp::assimp)
+
 # Add Windows libraries and compiler flags
 if(WIN32)
     target_link_libraries(OuterWildsECS PRIVATE d3d11 dxgi d3dcompiler)

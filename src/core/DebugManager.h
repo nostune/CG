@@ -23,12 +23,13 @@ public:
     }
 
     void Update(float deltaTime) {
-        m_TimeAccumulator += deltaTime;
-        if (m_TimeAccumulator >= m_DebugInterval) {
-            PrintAllMessages();
-            m_DebugMessages.clear();
-            m_TimeAccumulator = 0.0f;
-        }
+        // 定期调试输出已禁用
+        // m_TimeAccumulator += deltaTime;
+        // if (m_TimeAccumulator >= m_DebugInterval) {
+        //     PrintAllMessages();
+        //     m_DebugMessages.clear();
+        //     m_TimeAccumulator = 0.0f;
+        // }
     }
     
     void SetShowFPS(bool show) { m_ShowFPS = show; }

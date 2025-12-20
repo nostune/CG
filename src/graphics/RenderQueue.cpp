@@ -79,41 +79,46 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
             batch.vertexBuffer->GetDevice(&g_CachedDevice);
         }
         
-        // === Shader + 纹理资源解析（兼容多种情况）===
+        // === Multi-Texture PBR Resource Extraction ===
         resources::Shader* shaderToUse = nullptr;
-        ID3D11ShaderResourceView* textureSRV = nullptr;
+        ID3D11ShaderResourceView* albedoSRV = nullptr;
+        ID3D11ShaderResourceView* normalSRV = nullptr;
+        ID3D11ShaderResourceView* metallicSRV = nullptr;
+        ID3D11ShaderResourceView* roughnessSRV = nullptr;
         
-        if (meshComp.material && meshComp.material->shaderProgram) {
-            void* ptr = meshComp.material->shaderProgram;
+        if (meshComp.material) {
+            // Extract all PBR textures from material
+            albedoSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->albedoTextureSRV);
+            normalSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->normalTextureSRV);
+            metallicSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->metallicTextureSRV);
+            roughnessSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->roughnessTextureSRV);
             
-            // 方法1: 尝试作为SRV进行COM查询(更安全)
-            ID3D11ShaderResourceView* testSRV = static_cast<ID3D11ShaderResourceView*>(ptr);
-            IUnknown* testUnknown = nullptr;
-            
-            // 检查是否是有效的D3D11接口
-            HRESULT hr = testSRV->QueryInterface(__uuidof(ID3D11ShaderResourceView), (void**)&testUnknown);
-            
-            if (SUCCEEDED(hr) && testUnknown) {
-                // 情况2：material->shaderProgram 是 textureSRV （SceneAssetLoader的临时hack）
-                testUnknown->Release();  // 释放QueryInterface增加的引用计数
+            // Backward compatibility: fallback to old shaderProgram field
+            if (!albedoSRV && meshComp.material->shaderProgram) {
+                void* ptr = meshComp.material->shaderProgram;
+                ID3D11ShaderResourceView* testSRV = static_cast<ID3D11ShaderResourceView*>(ptr);
+                IUnknown* testUnknown = nullptr;
                 
-                textureSRV = testSRV;
-                
-                // 使用默认textured shader
-                if (g_CachedDevice) {
-                    shaderToUse = GetOrLoadShader("textured.vs", "textured.ps", g_CachedDevice);
+                HRESULT hr = testSRV->QueryInterface(__uuidof(ID3D11ShaderResourceView), (void**)&testUnknown);
+                if (SUCCEEDED(hr) && testUnknown) {
+                    testUnknown->Release();
+                    albedoSRV = testSRV;  // Old single-texture path
                 }
-            } else {
-                // 情况1：material->shaderProgram 是 Shader* （正确方式）
-                shaderToUse = static_cast<resources::Shader*>(ptr);
-                // TODO: 未来从material.texture字段获取纹理
+            }
+            
+            // Select appropriate shader based on available textures
+            if (g_CachedDevice) {
+                if (albedoSRV || normalSRV || metallicSRV || roughnessSRV) {
+                    shaderToUse = GetOrLoadShader("textured.vs", "textured.ps", g_CachedDevice);
+                } else {
+                    shaderToUse = GetOrLoadShader("basic.vs", "basic.ps", g_CachedDevice);
+                }
             }
         }
         
-        // 如果没有material或没有shader，使用默认basic shader（无纹理）
+        // Fallback to basic shader if no material
         if (!shaderToUse && g_CachedDevice) {
             shaderToUse = GetOrLoadShader("basic.vs", "basic.ps", g_CachedDevice);
-            textureSRV = nullptr;  // 确保使用basic shader时不使用纹理
         }
         
         // === 调试：输出shader解析结果 ===
@@ -121,29 +126,32 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         if (debugCount++ < 5) {  // 输出前5个entity
             std::cout << "[RenderQueue::Collect] Entity #" << debugCount 
                       << ": shader=" << (shaderToUse ? "OK" : "NULL")
-                      << ", texture=" << (textureSRV ? "OK" : "NULL")
-                      << ", VS=" << (shaderToUse && shaderToUse->GetVertexShader() ? "OK" : "NULL")
-                      << ", PS=" << (shaderToUse && shaderToUse->GetPixelShader() ? "OK" : "NULL")
-                      << ", InputLayout=" << (shaderToUse && shaderToUse->GetInputLayout() ? "OK" : "NULL")
+                      << ", albedo=" << (albedoSRV ? "OK" : "NULL")
+                      << ", normal=" << (normalSRV ? "OK" : "NULL")
+                      << ", metallic=" << (metallicSRV ? "OK" : "NULL")
+                      << ", roughness=" << (roughnessSRV ? "OK" : "NULL")
                       << std::endl;
         }
         
-        // 绑定Shader到batch
+        // 绑定Shader和多纹理到batch
         if (shaderToUse) {
             batch.vertexShader = shaderToUse->GetVertexShader();
             batch.pixelShader = shaderToUse->GetPixelShader();
             batch.inputLayout = shaderToUse->GetInputLayout();
-            batch.texture = textureSRV;
-            batch.material = meshComp.material.get();  // 保存material指针用于读取albedo
+            batch.albedoTexture = albedoSRV;
+            batch.normalTexture = normalSRV;
+            batch.metallicTexture = metallicSRV;
+            batch.roughnessTexture = roughnessSRV;
+            batch.material = meshComp.material.get();
             
             // 分配Shader ID
             if (batch.vertexShader && shaderIDs.find(batch.vertexShader) == shaderIDs.end()) {
                 shaderIDs[batch.vertexShader] = nextShaderID++;
             }
             
-            // 分配Material ID（基于纹理）
-            if (batch.texture && materialIDs.find(batch.texture) == materialIDs.end()) {
-                materialIDs[batch.texture] = nextMaterialID++;
+            // 分配Material ID（基于albedo纹理）
+            if (batch.albedoTexture && materialIDs.find(batch.albedoTexture) == materialIDs.end()) {
+                materialIDs[batch.albedoTexture] = nextMaterialID++;
             }
         } else {
             // 没有有效shader，跳过此entity
@@ -173,7 +181,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         // === 计算排序键 ===
         batch.renderPass = (meshComp.material && meshComp.material->isTransparent) ? 1 : 0;
         uint8_t shaderID = batch.vertexShader ? shaderIDs[batch.vertexShader] : 0;
-        uint8_t matID = batch.texture ? materialIDs[batch.texture] : 0;
+        uint8_t matID = batch.albedoTexture ? materialIDs[batch.albedoTexture] : 0;
         batch.CalculateSortKey(shaderID, matID, depth);
         
         m_Batches.push_back(batch);
@@ -181,29 +189,18 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
     
     m_Stats.totalBatches = static_cast<uint32_t>(m_Batches.size());
     
-    // === 调试：立即输出收集结果 ===
-    static int collectCount = 0;
-    if (collectCount++ < 5) {  // 只输出前5次
-        DebugManager::GetInstance().Log("RenderQueue::Collect", 
-            "Collected " + std::to_string(m_Batches.size()) + " batches");
-    }
+    // === 调试（已禁用）===
+    // static int collectCount = 0;
+    // if (collectCount++ < 5) {
+    //     DebugManager::GetInstance().Log("RenderQueue::Collect", ...);
+    // }
 }
 
 /**
  * @brief 执行绘制（带状态缓存）
  */
 void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectCB) {
-    static int executeDebugCount = 0;
-    if (executeDebugCount++ < 3) {
-        std::cout << "[RenderQueue::Execute] IMMEDIATE: Called #" << executeDebugCount 
-                  << ", batches=" << m_Batches.size() << std::endl;
-    }
-    
     if (!context || m_Batches.empty()) {
-        if (executeDebugCount <= 3) {
-            std::cout << "[RenderQueue::Execute] Early return: context=" << (context ? "OK" : "NULL") 
-                      << ", batches=" << m_Batches.size() << std::endl;
-        }
         return;
     }
     
@@ -229,25 +226,14 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
     ID3D11VertexShader* lastVS = nullptr;
     ID3D11PixelShader* lastPS = nullptr;
     ID3D11InputLayout* lastLayout = nullptr;
-    ID3D11ShaderResourceView* lastTexture = nullptr;
+    ID3D11ShaderResourceView* lastAlbedo = nullptr;
+    ID3D11ShaderResourceView* lastNormal = nullptr;
+    ID3D11ShaderResourceView* lastMetallic = nullptr;
+    ID3D11ShaderResourceView* lastRoughness = nullptr;
     bool samplerBound = false;
-    
-    if (executeDebugCount <= 3) {
-        std::cout << "[RenderQueue::Execute] About to iterate " << m_Batches.size() << " batches" << std::endl;
-    }
     
     int batchIndex = 0;
     for (const auto& batch : m_Batches) {
-        if (executeDebugCount <= 3) {
-            std::cout << "[RenderQueue::Execute] Batch " << batchIndex 
-                      << ": VS=" << (batch.vertexShader ? "OK" : "NULL")
-                      << ", PS=" << (batch.pixelShader ? "OK" : "NULL")
-                      << ", InputLayout=" << (batch.inputLayout ? "OK" : "NULL")
-                      << ", VB=" << (batch.vertexBuffer ? "OK" : "NULL")
-                      << ", IB=" << (batch.indexBuffer ? "OK" : "NULL")
-                      << ", texture=" << (batch.texture ? "OK" : "NULL")
-                      << ", indexCount=" << batch.indexCount << std::endl;
-        }
         
         // === 绑定Shader（仅在切换时） ===
         if (batch.vertexShader != lastVS) {
@@ -266,10 +252,11 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
             lastLayout = batch.inputLayout;
         }
         
-        // === 绑定纹理（仅在切换时） ===
-        if (batch.texture != lastTexture) {
-            if (batch.texture) {
-                context->PSSetShaderResources(0, 1, &batch.texture);
+        // === 绑定多纹理（PBR工作流：仅在切换时绑定）===
+        // Texture slot 0: Albedo/Diffuse map
+        if (batch.albedoTexture != lastAlbedo) {
+            if (batch.albedoTexture) {
+                context->PSSetShaderResources(0, 1, &batch.albedoTexture);
                 m_Stats.textureSwitches++;
                 
                 // 绑定sampler（只需一次）
@@ -278,12 +265,43 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
                     samplerBound = true;
                 }
             } else {
-                // 显式清空纹理槽（修复纹理共享Bug）
                 ID3D11ShaderResourceView* nullSRV = nullptr;
                 context->PSSetShaderResources(0, 1, &nullSRV);
-                m_Stats.textureSwitches++;
             }
-            lastTexture = batch.texture;
+            lastAlbedo = batch.albedoTexture;
+        }
+        
+        // Texture slot 1: Normal map
+        if (batch.normalTexture != lastNormal) {
+            if (batch.normalTexture) {
+                context->PSSetShaderResources(1, 1, &batch.normalTexture);
+            } else {
+                ID3D11ShaderResourceView* nullSRV = nullptr;
+                context->PSSetShaderResources(1, 1, &nullSRV);
+            }
+            lastNormal = batch.normalTexture;
+        }
+        
+        // Texture slot 2: Metallic map
+        if (batch.metallicTexture != lastMetallic) {
+            if (batch.metallicTexture) {
+                context->PSSetShaderResources(2, 1, &batch.metallicTexture);
+            } else {
+                ID3D11ShaderResourceView* nullSRV = nullptr;
+                context->PSSetShaderResources(2, 1, &nullSRV);
+            }
+            lastMetallic = batch.metallicTexture;
+        }
+        
+        // Texture slot 3: Roughness map
+        if (batch.roughnessTexture != lastRoughness) {
+            if (batch.roughnessTexture) {
+                context->PSSetShaderResources(3, 1, &batch.roughnessTexture);
+            } else {
+                ID3D11ShaderResourceView* nullSRV = nullptr;
+                context->PSSetShaderResources(3, 1, &nullSRV);
+            }
+            lastRoughness = batch.roughnessTexture;
         }
         
         // === 更新PerObject常量缓冲区 ===
@@ -321,39 +339,7 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
         context->DrawIndexed(batch.indexCount, 0, 0);
         m_Stats.drawCalls++;
         
-        if (executeDebugCount <= 3) {
-            std::cout << "[RenderQueue::Execute] Batch " << batchIndex << " drawn successfully" << std::endl;
-        }
         batchIndex++;
-        
-        // === 调试：输出第一个batch的详细信息 ===
-        static int batchDebugCount = 0;
-        if (batchDebugCount++ == 0) {
-            DebugManager::GetInstance().Log("RenderQueue::Execute",
-                "First batch: indexCount=" + std::to_string(batch.indexCount) +
-                ", vertexStride=" + std::to_string(batch.vertexStride) +
-                ", VS=" + std::string(batch.vertexShader ? "OK" : "NULL") +
-                ", PS=" + std::string(batch.pixelShader ? "OK" : "NULL") +
-                ", InputLayout=" + std::string(batch.inputLayout ? "OK" : "NULL"));
-        }
-    }
-    
-    // === 调试日志（前5帧输出详细信息）===
-    static int frameCount = 0;
-    if (frameCount++ < 5) {
-        DebugManager::GetInstance().Log("RenderQueue::Execute",
-            "Frame " + std::to_string(frameCount) +
-            ": Batches=" + std::to_string(m_Stats.totalBatches) +
-            ", Draws=" + std::to_string(m_Stats.drawCalls) +
-            ", ShaderSwitches=" + std::to_string(m_Stats.shaderSwitches) +
-            ", TextureSwitches=" + std::to_string(m_Stats.textureSwitches));
-    }
-    
-    // 每100帧输出统计
-    if (frameCount >= 100 && frameCount % 100 == 0) {
-        DebugManager::GetInstance().Log("RenderQueue",
-            "Stats: " + std::to_string(m_Stats.totalBatches) + " batches, " +
-            std::to_string(m_Stats.drawCalls) + " draws");
     }
 }
 

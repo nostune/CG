@@ -246,30 +246,80 @@ std::shared_ptr<Material> SceneAssetLoader::CreateMaterialResource(
     material->ao = 1.0f;
     material->isTransparent = false;
 
-    // Load texture if provided
+    // Load texture if provided (backward compatibility - single texture)
     if (!texturePath.empty()) {
         material->albedoTexture = texturePath;
         
-        // Load texture to GPU (store in material for renderer to use)
         ID3D11ShaderResourceView* textureSRV = nullptr;
         if (TextureLoader::LoadFromFile(device, texturePath, &textureSRV)) {
-            // Store texture handle in material
-            // Note: In production, you'd use a resource manager to avoid duplicates
-            material->shaderProgram = textureSRV; // Temporary storage
+            material->albedoTextureSRV = textureSRV;  // Use new multi-texture field
+            material->shaderProgram = textureSRV;     // Keep for backward compatibility
             
             DebugManager::GetInstance().Log("SceneAssetLoader", 
                 "Texture loaded successfully: " + texturePath);
         } else {
             DebugManager::GetInstance().Log("SceneAssetLoader", 
                 "Failed to load texture: " + texturePath + ", using default material");
-            material->shaderProgram = nullptr;  // 明确标记无纹理
+            material->albedoTextureSRV = nullptr;
+            material->shaderProgram = nullptr;
         }
     } else {
-        material->shaderProgram = nullptr;  // 明确标记无纹理
+        material->albedoTextureSRV = nullptr;
+        material->shaderProgram = nullptr;
         DebugManager::GetInstance().Log("SceneAssetLoader", 
             "No texture path provided, using default white material");
     }
 
+    return material;
+}
+
+std::shared_ptr<Material> SceneAssetLoader::CreatePBRMaterial(
+    ID3D11Device* device,
+    const std::string& albedoPath,
+    const std::string& normalPath,
+    const std::string& metallicPath,
+    const std::string& roughnessPath
+) {
+    auto material = std::make_shared<Material>();
+    
+    // Set default PBR values
+    material->albedo = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    material->metallic = 0.0f;
+    material->roughness = 0.5f;
+    material->ao = 1.0f;
+    material->isTransparent = false;
+    
+    // Helper lambda to load texture
+    auto loadTexture = [&](const std::string& path, void** outSRV, std::string& outPath) -> bool {
+        if (path.empty()) return false;
+        
+        outPath = path;
+        ID3D11ShaderResourceView* srv = nullptr;
+        if (TextureLoader::LoadFromFile(device, path, &srv)) {
+            *outSRV = srv;
+            DebugManager::GetInstance().Log("SceneAssetLoader", "Loaded texture: " + path);
+            return true;
+        } else {
+            DebugManager::GetInstance().Log("SceneAssetLoader", "Failed to load texture: " + path);
+            return false;
+        }
+    };
+    
+    // Load all PBR textures
+    loadTexture(albedoPath, &material->albedoTextureSRV, material->albedoTexture);
+    loadTexture(normalPath, &material->normalTextureSRV, material->normalTexture);
+    loadTexture(metallicPath, &material->metallicTextureSRV, material->metallicTexture);
+    loadTexture(roughnessPath, &material->roughnessTextureSRV, material->roughnessTexture);
+    
+    // Backward compatibility
+    material->shaderProgram = material->albedoTextureSRV;
+    
+    DebugManager::GetInstance().Log("SceneAssetLoader", 
+        "Created PBR material with " + 
+        std::to_string(!!(material->albedoTextureSRV) + !!(material->normalTextureSRV) + 
+                       !!(material->metallicTextureSRV) + !!(material->roughnessTextureSRV)) + 
+        " textures");
+    
     return material;
 }
 

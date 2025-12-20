@@ -30,8 +30,9 @@ public:
         // 遍历所有受重力影响的实体
         auto affectedView = registry.view<GravityAffectedComponent, TransformComponent>();
         
+        // 调试开关（设为false禁用输出）
         static int debugFrame = 0;
-        bool shouldDebug = (++debugFrame % 120 == 0); // 每2秒输出一次
+        bool shouldDebug = false; // (++debugFrame % 120 == 0);
         
         for (auto entity : affectedView) {
             auto& affected = affectedView.get<GravityAffectedComponent>(entity);
@@ -124,10 +125,12 @@ private:
             XMVECTOR diff = XMVectorSubtract(posVec, sourceVec);
             float distance = XMVectorGetX(XMVector3Length(diff));
             
-            // 检查是否在影响范围内
-            float influenceRadius = source.GetInfluenceRadius();
+            // === 关键修复：限制查找范围，避免月球干扰 ===
+            // 只在星球表面附近才附着（半径 + 小边界）
+            float attachmentRange = source.radius + 10.0f;  // 只在表面上方10米范围内
             
-            if (distance < influenceRadius && distance < minDistance) {
+            // 检查是否在附着范围内（而非影响范围）
+            if (distance < attachmentRange && distance < minDistance) {
                 nearest = entity;
                 minDistance = distance;
             }

@@ -114,11 +114,27 @@ public:
     );
 
     /**
-     * Create shared material resource
+     * Create shared material resource with multi-texture support
      */
     static std::shared_ptr<resources::Material> CreateMaterialResource(
         ID3D11Device* device,
         const std::string& texturePath
+    );
+    
+    /**
+     * Create material with multiple PBR textures
+     * @param device D3D11 device
+     * @param albedoPath Path to albedo/diffuse texture
+     * @param normalPath Path to normal map (optional)
+     * @param metallicPath Path to metallic map (optional)
+     * @param roughnessPath Path to roughness map (optional)
+     */
+    static std::shared_ptr<resources::Material> CreatePBRMaterial(
+        ID3D11Device* device,
+        const std::string& albedoPath,
+        const std::string& normalPath = "",
+        const std::string& metallicPath = "",
+        const std::string& roughnessPath = ""
     );
 
     /**

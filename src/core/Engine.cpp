@@ -4,10 +4,11 @@
 #include "../graphics/RenderSystem.h"
 #include "../physics/PhysicsSystem.h"
 #include "../physics/GravitySystem.h"
+#include "../physics/ApplyGravitySystem.h"
+#include "../physics/ReferenceFrameSystem.h"
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
 #include "../gameplay/OrbitSystem.h"
-#include "../gameplay/CelestialFollowSystem.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
 #include "../input/InputManager.h"
@@ -52,17 +53,20 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     // 轨道系统（在PhysicsSystem之前，更新天体位置）
     m_OrbitSystem = AddSystem<OrbitSystem>();
 
+    // 参考系系统（在OrbitSystem之后，补偿天体运动产生的位移）
+    m_ReferenceFrameSystem = AddSystem<ReferenceFrameSystem>();
+
     // 重力系统（在PhysicsSystem之前，用于计算重力）
     m_GravitySystem = AddSystem<GravitySystem>();
+
+    // 应用重力系统（在GravitySystem之后、PhysicsSystem之前，将重力力应用到刚体）
+    m_ApplyGravitySystem = AddSystem<ApplyGravitySystem>();
 
     // 玩家对齐系统（在PlayerSystem之前，用于调整玩家姿态）
     m_PlayerAlignmentSystem = AddSystem<PlayerAlignmentSystem>();
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
-
-    // 天体跟随系统（在PlayerSystem之后，应用天体位移到玩家）
-    m_CelestialFollowSystem = AddSystem<CelestialFollowSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
@@ -77,20 +81,12 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 }
 
 void Engine::Run() {
-    std::cout << "[Engine::Run] IMMEDIATE: Starting main loop, m_Running=" << m_Running << std::endl;
-    std::cout << "[Engine::Run] IMMEDIATE: m_Systems.size()=" << m_Systems.size() << std::endl;
+    // 启动日志（仅一次）
+    // std::cout << "[Engine::Run] Starting main loop" << std::endl;
     
-    int loopIterations = 0;
     while (m_Running) {
         MainLoop();
-        loopIterations++;
-        
-        // 每100次循环输出一次
-        if (loopIterations % 100 == 0) {
-            std::cout << "[Engine::Run] Loop iteration: " << loopIterations << std::endl;
-        }
     }
-    std::cout << "[Engine::Run] IMMEDIATE: Exited main loop after " << loopIterations << " iterations" << std::endl;
 }
 
 void Engine::Shutdown() {
@@ -99,64 +95,50 @@ void Engine::Shutdown() {
 }
 
 void Engine::MainLoop() {
-    static int loopCount = 0;
-    loopCount++;
-    if (loopCount <= 3) {
-        std::cout << "[Engine::MainLoop] IMMEDIATE: Loop iteration " << loopCount << std::endl;
-    }
-    
     MSG msg = {};
-    int msgCount = 0;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        msgCount++;
-        if (loopCount <= 3) {
-            std::cout << "[Engine::MainLoop] Message #" << msgCount << ": " << msg.message << std::endl;
-        }
-        
         TranslateMessage(&msg);
         DispatchMessage(&msg);
         
         if (msg.message == WM_QUIT) {
-            std::cout << "[Engine::MainLoop] IMMEDIATE: Received WM_QUIT, stopping" << std::endl;
             m_Running = false;
         }
     }
 
     if (!m_Running) {
-        std::cout << "[Engine::MainLoop] IMMEDIATE: m_Running is FALSE, returning early" << std::endl;
         return;
     }
 
     TimeManager::GetInstance().Update();
     m_DeltaTime = TimeManager::GetInstance().GetDeltaTime();
 
-    if (loopCount <= 3) {
-        std::cout << "[Engine::MainLoop] About to call Update(), deltaTime=" << m_DeltaTime << std::endl;
-    }
-
     Update();
-    
-    if (loopCount <= 3) {
-        std::cout << "[Engine::MainLoop] Update() completed" << std::endl;
-    }
 }
 
 void Engine::Update() {
     if (!m_SceneManager || !m_SceneManager->GetActiveScene()) return;
     auto& registry = m_SceneManager->GetActiveScene()->GetRegistry();
 
-    // === DEBUG: 输出系统数量 ===
-    static int updateCount = 0;
-    if (updateCount++ < 3) {
-        std::cout << "[Engine::Update] IMMEDIATE: Called #" << updateCount 
-                  << ", systems count: " << m_Systems.size() << std::endl;
-    }
+    // === 更新顺序说明 ===
+    // 1. OrbitSystem: 更新天体位置（圆弧运动）
+    // 2. ReferenceFrameSystem: 将附着物体同步到天体位置
+    // 3. GravitySystem/ApplyGravitySystem: 处理重力
+    // 4. PhysX模拟: 物理碰撞、摩擦等
+    // 5. ReferenceFrameSystem::PostPhysicsUpdate: 更新本地坐标
+    // 6. 其他系统...
 
-    // Update PhysX simulation
-    PhysXManager::GetInstance().Update(m_DeltaTime);
-
+    // 执行所有系统的Update
     for (auto& system : m_Systems) {
         system->Update(m_DeltaTime, registry);
+    }
+
+    // PhysX物理模拟
+    PhysXManager::GetInstance().Update(m_DeltaTime);
+
+    // === 物理模拟后：更新参考系的本地坐标 ===
+    // 这允许物理运动修改物体在天体表面的位置
+    if (m_ReferenceFrameSystem) {
+        m_ReferenceFrameSystem->PostPhysicsUpdate(registry);
     }
 
     DebugManager::GetInstance().Update(m_DeltaTime);

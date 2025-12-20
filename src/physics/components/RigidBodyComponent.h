@@ -7,8 +7,8 @@ namespace outer_wilds {
 
 struct RigidBodyComponent : public Component {
     float mass = 1.0f;
-    float drag = 0.0f;
-    float angularDrag = 0.05f;
+    float drag = 0.5f;           // 线性阻尼，防止无限滑动
+    float angularDrag = 0.5f;    // 角速度阻尼，防止无限旋转
     
     DirectX::XMFLOAT3 velocity = { 0.0f, 0.0f, 0.0f };
     DirectX::XMFLOAT3 angularVelocity = { 0.0f, 0.0f, 0.0f };

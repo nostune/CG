@@ -25,7 +25,7 @@ void InputManager::Initialize(HWND hwnd) {
     m_PlayerInput.mouseLookEnabled = true;
     SetMouseCapture(true);
 
-    DebugManager::GetInstance().Log("InputManager", "InputManager initialized");
+    
 }
 
 void InputManager::Update() {

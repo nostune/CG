@@ -161,11 +161,11 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
     // v0.3.0 渲染管线：Collect -> Sort -> Execute
     // ============================================
     
-    // 调试：确认执行到这里
-    static int pipelineDebugCount = 0;
-    if (pipelineDebugCount++ < 3) {
-        std::cout << "[RenderSystem] IMMEDIATE: Starting RenderQueue pipeline #" << pipelineDebugCount << std::endl;
-    }
+    // 调试（已禁用）
+    // static int pipelineDebugCount = 0;
+    // if (pipelineDebugCount++ < 3) {
+    //     std::cout << "[RenderSystem] Starting RenderQueue pipeline" << std::endl;
+    // }
     
     // 1. 清空并收集批次
     m_RenderQueue.Clear();
@@ -177,15 +177,11 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
     // 3. 执行绘制（带状态缓存）
     m_RenderQueue.Execute(context, m_PerObjectCB);
     
-    // 4. 调试日志
-    if (shouldDebug) {
-        const auto& stats = m_RenderQueue.GetStats();
-        DebugManager::GetInstance().Log("RenderSystem", 
-            "RenderQueue: " + std::to_string(stats.totalBatches) + " batches, " +
-            std::to_string(stats.drawCalls) + " draws, " +
-            std::to_string(stats.shaderSwitches) + " shader switches, " +
-            std::to_string(stats.textureSwitches) + " texture switches");
-    }
+    // 4. 调试日志（已禁用）
+    // if (shouldDebug) {
+    //     const auto& stats = m_RenderQueue.GetStats();
+    //     DebugManager::GetInstance().Log("RenderSystem", "...");
+    // }
 }
 
 components::CameraComponent* RenderSystem::FindActiveCamera(entt::registry& registry) {

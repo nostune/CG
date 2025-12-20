@@ -13,14 +13,15 @@
 #include "gameplay/components/PlayerAlignmentComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
 #include "gameplay/components/OrbitComponent.h"
-#include "gameplay/components/StandingOnComponent.h"
-#include "gameplay/OrbitSystem.h"
+#include "physics/components/ReferenceFrameComponent.h"
 #include "physics/components/GravitySourceComponent.h"
 #include "physics/components/GravityAffectedComponent.h"
 #include "physics/components/RigidBodyComponent.h"
+#include "physics/components/GravityAlignmentComponent.h"
 #include "graphics/resources/Material.h"
 #include "graphics/resources/Shader.h"
 #include "graphics/resources/TextureLoader.h"
+#include "graphics/resources/AssimpLoader.h"
 #include "graphics/RenderSystem.h"
 #include "physics/PhysXManager.h"
 #include <PxPhysicsAPI.h>
@@ -302,19 +303,24 @@ int main(int argc, char* argv[]) {
                 outer_wilds::DebugManager::GetInstance().Log("Main", "Planet has no RigidBodyComponent!");
             }
             
-            // 【测试】添加轨道组件 - 让地球围绕原点公转以测试玩家跟随
+            // 【测试】添加轨道组件 - 禁用公转测试静态情况
             auto& planetOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(planetEntity);
             planetOrbit.centerEntity = entt::null;  // 围绕世界原点
             planetOrbit.radius = 100.0f;  // 100米轨道半径
             planetOrbit.period = 60.0f;   // 60秒一圈（慢速，方便观察）
             planetOrbit.currentAngle = 0.0f;  // 从X轴正方向开始
-            planetOrbit.isActive = true;
+            planetOrbit.isActive = false;  // 禁用公转测试静态情况
             
-            // 立即将地球移动到轨道起始位置
+            // 添加参考系组件（使行星成为可附着的参考系）
+            auto& planetRefFrame = scene->GetRegistry().emplace<outer_wilds::components::ReferenceFrameComponent>(planetEntity);
+            planetRefFrame.name = "Earth";
+            planetRefFrame.isActive = true;
+            
+            // 将地球放在原点
             auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
-            planetTransform.position.x = planetOrbit.radius * cosf(planetOrbit.currentAngle);
+            planetTransform.position.x = 0.0f;
             planetTransform.position.y = 0.0f;
-            planetTransform.position.z = planetOrbit.radius * sinf(planetOrbit.currentAngle);
+            planetTransform.position.z = 0.0f;
             
             std::stringstream orbitLog;
             orbitLog << "TEST: Planet orbit enabled at (" << planetTransform.position.x 
@@ -327,38 +333,17 @@ int main(int argc, char* argv[]) {
             outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to create planet!");
         }
 
-        // ========================================
-        // 创建参考网格平面
-        // ========================================
-        auto gridEntity = scene->CreateEntity("grid_reference");
-        auto& gridTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(gridEntity);
-        gridTransform.position = {0.0f, 0.0f, 0.0f};
-        gridTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
-        gridTransform.scale = {1.0f, 1.0f, 1.0f};
-        
-        auto& gridMeshComponent = scene->GetRegistry().emplace<outer_wilds::components::MeshComponent>(gridEntity);
-        gridMeshComponent.mesh = groundMesh;
-        gridMeshComponent.material = groundRenderMaterial;
-        gridMeshComponent.isVisible = true;
-        gridMeshComponent.castsShadows = false;
-        
-        auto& gridRenderPriority = scene->GetRegistry().emplace<outer_wilds::components::RenderPriorityComponent>(gridEntity);
-        gridRenderPriority.renderPass = 0;
-        gridRenderPriority.sortKey = 50;
-        gridRenderPriority.lodLevel = 0;
-        
-        outer_wilds::DebugManager::GetInstance().Log("Main", "Reference grid created");
 
         // ========================================
-        // 创建玩家
+        // 创建玩家（先创建，用于确定飞船位置）
         // ========================================
         outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Player ===");
         
+        // 获取地球当前位置
+        auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
+        
         auto playerEntity = scene->CreateEntity("player");
         auto& playerTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(playerEntity);
-        
-        // 获取地球当前位置（已经在轨道起始点）
-        auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
         
         // 玩家位置 = 地球位置 + 向上偏移（使用世界Y轴）
         playerTransform.position.x = planetTransform.position.x;
@@ -369,13 +354,125 @@ int main(int argc, char* argv[]) {
         std::stringstream playerLog;
         playerLog << "Player spawn position: (" << playerTransform.position.x 
                   << ", " << playerTransform.position.y 
-                  << ", " << playerTransform.position.z << ")\n"
-                  << "  - Planet position: (" << planetTransform.position.x 
-                  << ", " << planetTransform.position.y 
-                  << ", " << planetTransform.position.z << ")\n"
-                  << "  - Planet radius: " << PLANET_ACTUAL_RADIUS << "m\n"
-                  << "  - Height above planet center: " << PLAYER_START_HEIGHT << "m";
+                  << ", " << playerTransform.position.z << ")";
         outer_wilds::DebugManager::GetInstance().Log("Main", playerLog.str());
+
+        // ========================================
+        // 创建测试刚体（使用player.obj作为简单测试模型）
+        // ========================================
+        outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Test RigidBody (player.obj) ===");
+        
+        // 测试刚体位置：在地球表面，玩家附近
+        DirectX::XMFLOAT3 testRigidBodyPosition = playerTransform.position;
+        testRigidBodyPosition.x += 3.0f;  // 在玩家右侧3米处
+        
+        const float TEST_RIGIDBODY_SCALE = 0.3f;  // 缩放比例
+        
+        // 使用SceneAssetLoader加载模型（不带物理，我们手动添加）
+        entt::entity testRigidBodyEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+            scene->GetRegistry(),
+            scene,
+            engine.GetRenderSystem()->GetBackend()->GetDevice(),
+            "assets/BlendObj/player.obj",
+            "",  // 不指定纹理，使用MTL
+            testRigidBodyPosition,
+            DirectX::XMFLOAT3(TEST_RIGIDBODY_SCALE, TEST_RIGIDBODY_SCALE, TEST_RIGIDBODY_SCALE),
+            nullptr  // 不使用内置物理，我们手动添加
+        );
+        
+        if (testRigidBodyEntity != entt::null) {
+            // 创建PhysX刚体（使用胶囊体碰撞盒，和玩家一样）
+            auto* pxPhysics = outer_wilds::PhysXManager::GetInstance().GetPhysics();
+            auto* pxScene = outer_wilds::PhysXManager::GetInstance().GetScene();
+            
+            // 创建高摩擦材质（防止滑动）
+            physx::PxMaterial* testRBMaterial = pxPhysics->createMaterial(
+                1.5f,   // static friction（高静摩擦）
+                1.0f,   // dynamic friction
+                0.0f    // restitution（零弹性）
+            );
+            
+            // 胶囊体参数（和玩家一样）
+            // player.obj 尺寸：1m x 3.6m x 1m（Y轴从-1.8到1.8）
+            // 缩放后：0.3m x 1.08m x 0.3m
+            // 胶囊体：高度约1.0m，半径0.15m
+            float capsuleRadius = 0.15f;  // 半径
+            float capsuleHalfHeight = 0.35f;  // 半高（不包括两端半球）
+            physx::PxCapsuleGeometry capsuleGeom(capsuleRadius, capsuleHalfHeight);
+            
+            // 创建Dynamic Actor
+            physx::PxTransform pxTransform(
+                physx::PxVec3(testRigidBodyPosition.x, testRigidBodyPosition.y, testRigidBodyPosition.z));
+            physx::PxRigidDynamic* testRBActor = pxPhysics->createRigidDynamic(pxTransform);
+            
+            // 创建并附加碰撞形状
+            physx::PxShape* testRBShape = pxPhysics->createShape(capsuleGeom, *testRBMaterial);
+            testRBActor->attachShape(*testRBShape);
+            testRBShape->release();
+            
+            // 设置质量
+            physx::PxRigidBodyExt::updateMassAndInertia(*testRBActor, 70.0f);  // 70kg（人类体重）
+            
+            // === 关键：防止旋转和滑动 ===
+            // 1. 锁定旋转自由度（防止翻滚）
+            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_X, true);
+            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y, true);
+            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z, true);
+            
+            // 2. 设置高阻尼（防止滑动）
+            testRBActor->setLinearDamping(2.0f);   // 高线性阻尼
+            testRBActor->setAngularDamping(5.0f);  // 极高角速度阻尼
+            
+            // 3. 启用CCD（防止穿透）
+            testRBActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
+            
+            // 4. 设置休眠阈值（快速稳定）
+            testRBActor->setSleepThreshold(0.1f);
+            testRBActor->setStabilizationThreshold(0.05f);
+            
+            // 添加到场景
+            pxScene->addActor(*testRBActor);
+            
+            // 添加RigidBodyComponent
+            auto& testRBRigidBody = scene->GetRegistry().emplace<outer_wilds::RigidBodyComponent>(testRigidBodyEntity);
+            testRBRigidBody.mass = 70.0f;
+            testRBRigidBody.useGravity = true;
+            testRBRigidBody.isKinematic = false;
+            testRBRigidBody.drag = 2.0f;
+            testRBRigidBody.angularDrag = 5.0f;
+            testRBRigidBody.physxActor = testRBActor;
+            
+            // 添加重力影响组件
+            auto& testRBGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(testRigidBodyEntity);
+            testRBGravity.affectedByGravity = true;
+            testRBGravity.gravityScale = 1.0f;
+            
+            // 添加参考系附着组件
+            auto& testRBAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(testRigidBodyEntity);
+            testRBAttached.autoAttach = true;
+            testRBAttached.enableCompensation = true;
+            
+            // 添加重力对齐组件（静态物体：强制对齐防止滑动）
+            auto& testRBAlignment = scene->GetRegistry().emplace<outer_wilds::components::GravityAlignmentComponent>(testRigidBodyEntity);
+            testRBAlignment.mode = outer_wilds::components::GravityAlignmentComponent::AlignmentMode::FORCE_ALIGN;
+            testRBAlignment.alignmentSpeed = 0.0f;  // 瞬间对齐
+            
+            std::stringstream testRBLog;
+            testRBLog << "TEST RIGIDBODY (player.obj) created at (" << testRigidBodyPosition.x
+                     << ", " << testRigidBodyPosition.y
+                     << ", " << testRigidBodyPosition.z << ") with capsule collider r=" << capsuleRadius 
+                     << " h=" << (capsuleHalfHeight * 2.0f + capsuleRadius * 2.0f);
+            outer_wilds::DebugManager::GetInstance().Log("Main", testRBLog.str());
+            std::cout << "[Main] Test RigidBody created successfully!" << std::endl;
+        } else {
+            outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to load player.obj for test RigidBody!");
+            std::cout << "[Main] ERROR: player.obj load failed!" << std::endl;
+        }
+
+
+        // ========================================
+        // 继续配置玩家组件
+        // ========================================
         
         // Add player component
         scene->GetRegistry().emplace<outer_wilds::PlayerComponent>(playerEntity);
@@ -476,10 +573,10 @@ int main(int argc, char* argv[]) {
         auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
         playerInput.mouseLookEnabled = true;
         
-        // Add standing-on component (让玩家跟随移动的天体)
-        auto& standingOn = scene->GetRegistry().emplace<outer_wilds::components::StandingOnComponent>(playerEntity);
-        standingOn.followEnabled = true;
-        standingOn.detectionThreshold = 5.0f;
+        // 添加参考系附着组件，让玩家跟随天体运动
+        auto& playerAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(playerEntity);
+        playerAttached.autoAttach = true;  // 自动附着到当前重力源
+        playerAttached.enableCompensation = true;
         
         // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
         outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
@@ -541,7 +638,7 @@ int main(int argc, char* argv[]) {
             moonOrbit.currentAngle = 0.0f;  // 从正X轴开始
             moonOrbit.isActive = true;
             
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Moon created successfully with orbit");
+            
         } else {
             outer_wilds::DebugManager::GetInstance().Log("Main", "Failed to load moon model");
         }
