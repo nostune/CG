@@ -13,6 +13,7 @@
 #include "gameplay/components/PlayerAlignmentComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
 #include "gameplay/components/OrbitComponent.h"
+#include "gameplay/components/StandingOnComponent.h"
 #include "gameplay/OrbitSystem.h"
 #include "physics/components/GravitySourceComponent.h"
 #include "physics/components/GravityAffectedComponent.h"
@@ -301,7 +302,27 @@ int main(int argc, char* argv[]) {
                 outer_wilds::DebugManager::GetInstance().Log("Main", "Planet has no RigidBodyComponent!");
             }
             
-            outer_wilds::DebugManager::GetInstance().Log("Main", "Planet created successfully at origin (0,0,0)");
+            // 【测试】添加轨道组件 - 让地球围绕原点公转以测试玩家跟随
+            auto& planetOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(planetEntity);
+            planetOrbit.centerEntity = entt::null;  // 围绕世界原点
+            planetOrbit.radius = 100.0f;  // 100米轨道半径
+            planetOrbit.period = 60.0f;   // 60秒一圈（慢速，方便观察）
+            planetOrbit.currentAngle = 0.0f;  // 从X轴正方向开始
+            planetOrbit.isActive = true;
+            
+            // 立即将地球移动到轨道起始位置
+            auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
+            planetTransform.position.x = planetOrbit.radius * cosf(planetOrbit.currentAngle);
+            planetTransform.position.y = 0.0f;
+            planetTransform.position.z = planetOrbit.radius * sinf(planetOrbit.currentAngle);
+            
+            std::stringstream orbitLog;
+            orbitLog << "TEST: Planet orbit enabled at (" << planetTransform.position.x 
+                     << ", " << planetTransform.position.y 
+                     << ", " << planetTransform.position.z << ")";
+            outer_wilds::DebugManager::GetInstance().Log("Main", orbitLog.str());
+            
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Planet created successfully with orbit");
         } else {
             outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to create planet!");
         }
@@ -335,14 +356,25 @@ int main(int argc, char* argv[]) {
         
         auto playerEntity = scene->CreateEntity("player");
         auto& playerTransform = scene->GetRegistry().emplace<outer_wilds::TransformComponent>(playerEntity);
-        playerTransform.position = {0.0f, PLAYER_START_HEIGHT, 0.0f};  // 使用计算好的高度
+        
+        // 获取地球当前位置（已经在轨道起始点）
+        auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
+        
+        // 玩家位置 = 地球位置 + 向上偏移（使用世界Y轴）
+        playerTransform.position.x = planetTransform.position.x;
+        playerTransform.position.y = planetTransform.position.y + PLAYER_START_HEIGHT;
+        playerTransform.position.z = planetTransform.position.z;
         playerTransform.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
         
         std::stringstream playerLog;
-        playerLog << "Player spawn position: (0, " << PLAYER_START_HEIGHT << ", 0)\n"
+        playerLog << "Player spawn position: (" << playerTransform.position.x 
+                  << ", " << playerTransform.position.y 
+                  << ", " << playerTransform.position.z << ")\n"
+                  << "  - Planet position: (" << planetTransform.position.x 
+                  << ", " << planetTransform.position.y 
+                  << ", " << planetTransform.position.z << ")\n"
                   << "  - Planet radius: " << PLANET_ACTUAL_RADIUS << "m\n"
-                  << "  - Distance from center: " << PLAYER_START_HEIGHT << "m\n"
-                  << "  - Height above surface: " << (PLAYER_START_HEIGHT - PLANET_ACTUAL_RADIUS) << "m";
+                  << "  - Height above planet center: " << PLAYER_START_HEIGHT << "m";
         outer_wilds::DebugManager::GetInstance().Log("Main", playerLog.str());
         
         // Add player component
@@ -444,6 +476,11 @@ int main(int argc, char* argv[]) {
         auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
         playerInput.mouseLookEnabled = true;
         
+        // Add standing-on component (让玩家跟随移动的天体)
+        auto& standingOn = scene->GetRegistry().emplace<outer_wilds::components::StandingOnComponent>(playerEntity);
+        standingOn.followEnabled = true;
+        standingOn.detectionThreshold = 5.0f;
+        
         // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
         outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
         
@@ -522,4 +559,5 @@ int main(int argc, char* argv[]) {
     engine.Shutdown();
     
     return 0;
+    
 }

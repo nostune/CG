@@ -15,6 +15,7 @@ class PlayerAlignmentSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
 class OrbitSystem;
+class CelestialFollowSystem;
 
 class Engine {
 public:
@@ -58,6 +59,7 @@ private:
     std::shared_ptr<PhysicsSystem> m_PhysicsSystem;
     std::shared_ptr<PlayerSystem> m_PlayerSystem;
     std::shared_ptr<GravitySystem> m_GravitySystem;
+    std::shared_ptr<CelestialFollowSystem> m_CelestialFollowSystem;
     std::shared_ptr<PlayerAlignmentSystem> m_PlayerAlignmentSystem;
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;

@@ -232,18 +232,16 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         DirectX::XMStoreFloat3(&camera.target, targetPos);
         
         // === 同步视觉模型实体位置 ===
-        // 只在玩家相机激活时同步(避免自由相机模式下误同步)
-        if (camera.isActive) {
-            auto* playerComp = registry.try_get<PlayerComponent>(entity);
-            if (playerComp && playerComp->visualModelEntity != entt::null) {
-                auto* modelTransform = registry.try_get<TransformComponent>(playerComp->visualModelEntity);
-                if (modelTransform) {
-                    // 视觉模型位置 = 脚位置 (不是眼睛位置)
-                    DirectX::XMStoreFloat3(&modelTransform->position, footPos);
-                    
-                    // 可选: 根据移动方向旋转模型
-                    // 这里暂时不旋转,保持默认朝向
-                }
+        // 始终同步视觉模型（即使在自由相机模式下也要更新，这样才能看到玩家跟随天体移动）
+        auto* playerComp = registry.try_get<PlayerComponent>(entity);
+        if (playerComp && playerComp->visualModelEntity != entt::null) {
+            auto* modelTransform = registry.try_get<TransformComponent>(playerComp->visualModelEntity);
+            if (modelTransform) {
+                // 视觉模型位置 = 脚位置 (不是眼睛位置)
+                DirectX::XMStoreFloat3(&modelTransform->position, footPos);
+                
+                // 可选: 根据移动方向旋转模型
+                // 这里暂时不旋转,保持默认朝向
             }
         }
         

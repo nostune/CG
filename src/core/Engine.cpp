@@ -7,6 +7,7 @@
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
 #include "../gameplay/OrbitSystem.h"
+#include "../gameplay/CelestialFollowSystem.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
 #include "../input/InputManager.h"
@@ -59,6 +60,9 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 天体跟随系统（在PlayerSystem之后，应用天体位移到玩家）
+    m_CelestialFollowSystem = AddSystem<CelestialFollowSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
