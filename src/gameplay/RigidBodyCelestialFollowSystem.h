@@ -43,6 +43,9 @@ public:
             // 检查是否启用跟随且有有效的PhysX Actor
             if (!standing.followEnabled || !rigidBody.physxActor) continue;
             
+            // 跳过 Kinematic 物体（它们由其他系统管理位置）
+            if (rigidBody.isKinematic) continue;
+            
             // 确保是动态刚体（只有动态刚体可以被移动）
             physx::PxRigidDynamic* dynamicActor = rigidBody.physxActor->is<physx::PxRigidDynamic>();
             if (!dynamicActor) continue;

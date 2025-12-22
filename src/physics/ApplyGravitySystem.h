@@ -3,6 +3,7 @@
 #include "components/GravityAffectedComponent.h"
 #include "components/RigidBodyComponent.h"
 #include "../scene/components/TransformComponent.h"
+#include "../gameplay/components/SpacecraftComponent.h"
 #include "PhysXManager.h"
 #include <DirectXMath.h>
 #include <entt/entt.hpp>
@@ -49,10 +50,20 @@ public:
                 continue;
             }
             
+            // 跳过 Kinematic 物体（不能对其施加力）
+            if (rigidBody.isKinematic) {
+                continue;
+            }
+            
             // 转换为PhysX动态actor
             physx::PxRigidDynamic* dynamicActor = rigidBody.physxActor->is<physx::PxRigidDynamic>();
             if (!dynamicActor) {
                 continue;  // 不是动态actor
+            }
+            
+            // 再次检查 PhysX 层面是否为 Kinematic
+            if (dynamicActor->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC) {
+                continue;
             }
             
             // 1. 获取重力方向和强度
