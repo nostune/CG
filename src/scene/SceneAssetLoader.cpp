@@ -5,6 +5,7 @@
 #include "../graphics/components/RenderableComponent.h"
 #include "../graphics/components/RenderPriorityComponent.h"
 #include "../graphics/resources/OBJLoader.h"
+#include "../graphics/resources/AssimpLoader.h"
 #include "../graphics/resources/TextureLoader.h"
 #include "../physics/components/ColliderComponent.h"
 #include "../physics/components/RigidBodyComponent.h"
@@ -19,6 +20,15 @@ namespace outer_wilds {
 using namespace components;
 using namespace resources;
 
+// 辅助函数：获取文件扩展名（小写）
+static std::string GetFileExtension(const std::string& filePath) {
+    size_t dotPos = filePath.find_last_of('.');
+    if (dotPos == std::string::npos) return "";
+    std::string ext = filePath.substr(dotPos + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext;
+}
+
 entt::entity SceneAssetLoader::LoadModelAsEntity(
     entt::registry& registry,
     std::shared_ptr<Scene> scene,
@@ -29,8 +39,37 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
     const DirectX::XMFLOAT3& scale,
     const PhysicsOptions* physicsOpts
 ) {
-    // Load mesh resource
-    auto mesh = LoadMeshResource(objPath);
+    std::string ext = GetFileExtension(objPath);
+    std::shared_ptr<Mesh> mesh = nullptr;
+    std::vector<std::string> fbxTexturePaths;  // Textures from FBX/GLTF
+    
+    // ============================================
+    // LOAD MESH BASED ON FILE FORMAT
+    // ============================================
+    if (ext == "fbx" || ext == "gltf" || ext == "glb" || ext == "dae" || ext == "blend" || ext == "3ds") {
+        // Use AssimpLoader for FBX and other formats
+        LoadedModel model;
+        if (!AssimpLoader::LoadFromFile(objPath, model)) {
+            DebugManager::GetInstance().Log("SceneAssetLoader", "Assimp loading failed: " + objPath);
+            return entt::null;
+        }
+        mesh = model.mesh;
+        fbxTexturePaths = model.texturePaths;  // Get embedded texture paths
+        
+        DebugManager::GetInstance().Log("SceneAssetLoader", 
+            "Loaded mesh (Assimp) with " + std::to_string(mesh->GetVertices().size()) + " vertices, " +
+            std::to_string(fbxTexturePaths.size()) + " textures from model");
+    } else {
+        // Use OBJLoader for OBJ files
+        mesh = std::make_shared<Mesh>();
+        if (!OBJLoader::LoadFromFile(objPath, *mesh)) {
+            DebugManager::GetInstance().Log("SceneAssetLoader", "OBJ loading failed: " + objPath);
+            return entt::null;
+        }
+        DebugManager::GetInstance().Log("SceneAssetLoader", 
+            "Loaded mesh (OBJ) with " + std::to_string(mesh->GetVertices().size()) + " vertices");
+    }
+    
     if (!mesh) {
         DebugManager::GetInstance().Log("SceneAssetLoader", "Failed to load mesh: " + objPath);
         return entt::null;
@@ -42,37 +81,53 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
     // ============================================
     // TEXTURE PATH RESOLUTION STRATEGY
     // ============================================
+    // Priority order:
     // 1. If texturePath provided explicitly → use it directly
-    // 2. If empty → try to parse from .mtl file (Blender export)
-    // 3. MTL paths are relative, need to fix "textures/" → "Texture/"
+    // 2. If FBX/GLTF → use textures extracted from model
+    // 3. If OBJ → try to parse from .mtl file
     // ============================================
     
     std::string finalTexturePath = texturePath;
+    std::string modelDir = objPath.substr(0, objPath.find_last_of("/\\") + 1);
+    
     if (finalTexturePath.empty()) {
-        // Try to find .mtl file with same name as .obj
-        std::string mtlPath = objPath.substr(0, objPath.find_last_of('.')) + ".mtl";
-        std::string mtlTexturePath = ParseMTLFile(mtlPath);
-        
-        if (!mtlTexturePath.empty()) {
-            // MTL paths are relative to .obj directory
-            std::string objDir = objPath.substr(0, objPath.find_last_of("/\\") + 1);
-            
-            // ============================================
-            // CRITICAL FIX: Blender exports use lowercase "textures/"
-            // but our project structure uses "Texture/" (capital T)
-            // ============================================
-            if (mtlTexturePath.find("textures/") == 0) {
-                // Replace "textures/" with "Texture/" to match project structure
-                mtlTexturePath = "Texture/" + mtlTexturePath.substr(9);
-            }
-            
-            finalTexturePath = objDir + mtlTexturePath;
-            
+        // Try FBX embedded textures first
+        if (!fbxTexturePaths.empty() && !fbxTexturePaths[LoadedModel::ALBEDO].empty()) {
+            finalTexturePath = fbxTexturePaths[LoadedModel::ALBEDO];
             DebugManager::GetInstance().Log("SceneAssetLoader", 
-                "Found texture from MTL: " + finalTexturePath);
+                "Using texture from FBX: " + finalTexturePath);
         } else {
-            DebugManager::GetInstance().Log("SceneAssetLoader", 
-                "Warning: No texture found in MTL file");
+            // Fall back to MTL file (for OBJ files)
+            std::string mtlPath = objPath.substr(0, objPath.find_last_of('.')) + ".mtl";
+            std::string mtlTexturePath = ParseMTLFile(mtlPath);
+            
+            if (!mtlTexturePath.empty()) {
+                // MTL paths are relative to .obj directory
+                if (mtlTexturePath.find("textures/") == 0) {
+                    mtlTexturePath = "Texture/" + mtlTexturePath.substr(9);
+                }
+                finalTexturePath = modelDir + mtlTexturePath;
+                DebugManager::GetInstance().Log("SceneAssetLoader", 
+                    "Found texture from MTL: " + finalTexturePath);
+            } else {
+                // Last resort: look for common texture file patterns in model directory
+                std::vector<std::string> commonPatterns = {
+                    "texture_diffuse_00.png",
+                    "diffuse.png",
+                    "albedo.png",
+                    "base_color.png"
+                };
+                for (const auto& pattern : commonPatterns) {
+                    std::string testPath = modelDir + pattern;
+                    std::ifstream testFile(testPath);
+                    if (testFile.good()) {
+                        finalTexturePath = testPath;
+                        DebugManager::GetInstance().Log("SceneAssetLoader", 
+                            "Found texture by pattern: " + finalTexturePath);
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -220,6 +275,23 @@ int SceneAssetLoader::LoadSceneFromFile(
 }
 
 std::shared_ptr<Mesh> SceneAssetLoader::LoadMeshResource(const std::string& objPath) {
+    std::string ext = GetFileExtension(objPath);
+    
+    // Use AssimpLoader for FBX, GLTF, and other formats
+    if (ext == "fbx" || ext == "gltf" || ext == "glb" || ext == "dae" || ext == "blend" || ext == "3ds") {
+        LoadedModel model;
+        if (!AssimpLoader::LoadFromFile(objPath, model)) {
+            DebugManager::GetInstance().Log("SceneAssetLoader", "Assimp loading failed: " + objPath);
+            return nullptr;
+        }
+        
+        DebugManager::GetInstance().Log("SceneAssetLoader", 
+            "Loaded mesh (Assimp) with " + std::to_string(model.mesh->GetVertices().size()) + " vertices");
+        
+        return model.mesh;
+    }
+    
+    // Use OBJLoader for OBJ files (original behavior)
     auto mesh = std::make_shared<Mesh>();
     
     if (!OBJLoader::LoadFromFile(objPath, *mesh)) {
@@ -256,7 +328,8 @@ std::shared_ptr<Material> SceneAssetLoader::CreateMaterialResource(
             material->shaderProgram = textureSRV;     // Keep for backward compatibility
             
             DebugManager::GetInstance().Log("SceneAssetLoader", 
-                "Texture loaded successfully: " + texturePath);
+                "Texture loaded successfully: " + texturePath + 
+                ", SRV=" + std::to_string(reinterpret_cast<uintptr_t>(textureSRV)));
         } else {
             DebugManager::GetInstance().Log("SceneAssetLoader", 
                 "Failed to load texture: " + texturePath + ", using default material");
@@ -269,6 +342,11 @@ std::shared_ptr<Material> SceneAssetLoader::CreateMaterialResource(
         DebugManager::GetInstance().Log("SceneAssetLoader", 
             "No texture path provided, using default white material");
     }
+
+    // Debug: confirm material state
+    DebugManager::GetInstance().Log("SceneAssetLoader", 
+        "Material created: albedoSRV=" + std::to_string(reinterpret_cast<uintptr_t>(material->albedoTextureSRV)) + 
+        ", shaderProgram=" + std::to_string(reinterpret_cast<uintptr_t>(material->shaderProgram)));
 
     return material;
 }

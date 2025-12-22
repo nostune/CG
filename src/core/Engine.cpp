@@ -6,11 +6,16 @@
 #include "../physics/GravitySystem.h"
 #include "../physics/ApplyGravitySystem.h"
 #include "../physics/ReferenceFrameSystem.h"
+#include "../physics/DynamicAttachSystem.h"
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
 #include "../gameplay/OrbitSystem.h"
+#include "../gameplay/SpacecraftControlSystem.h"
+#include "../gameplay/SpacecraftInteractionSystem.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
+#include "../audio/AudioSystem.h"
+#include "../ui/UISystem.h"
 #include "../input/InputManager.h"
 #include "../physics/PhysXManager.h"
 #include "../scene/SceneManager.h"
@@ -56,6 +61,9 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     // 参考系系统（在OrbitSystem之后，补偿天体运动产生的位移）
     m_ReferenceFrameSystem = AddSystem<ReferenceFrameSystem>();
 
+    // 动态吸附系统（在ReferenceFrameSystem之后，管理动态物体的状态切换）
+    AddSystem<DynamicAttachSystem>();
+
     // 重力系统（在PhysicsSystem之前，用于计算重力）
     m_GravitySystem = AddSystem<GravitySystem>();
 
@@ -67,6 +75,10 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
+    
+    // 飞船系统（在PlayerSystem之后）
+    AddSystem<SpacecraftControlSystem>();
+    AddSystem<SpacecraftInteractionSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
@@ -75,6 +87,25 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     // 自由相机系统（在CameraModeSystem之后，处理自由视角移动）
     m_FreeCameraSystem = AddSystem<FreeCameraSystem>();
     m_FreeCameraSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 音频系统
+    m_AudioSystem = AddSystem<AudioSystem>();
+    if (!m_AudioSystem->InitializeAudio()) {
+        DebugManager::GetInstance().Log("AudioSystem", "Failed to initialize AudioSystem");
+        // 不阻止游戏启动，音频系统失败不是致命错误
+    } else {
+        DebugManager::GetInstance().Log("AudioSystem", "AudioSystem initialized successfully");
+    }
+
+    // UI系统
+    m_UISystem = AddSystem<UISystem>();
+    auto d3d11Device = static_cast<ID3D11Device*>(m_RenderSystem->GetBackend()->GetDevice());
+    auto d3d11Context = static_cast<ID3D11DeviceContext*>(m_RenderSystem->GetBackend()->GetContext());
+    if (!m_UISystem->Initialize(d3d11Device, d3d11Context, static_cast<HWND>(hwnd))) {
+        DebugManager::GetInstance().Log("UISystem", "Failed to initialize UISystem");
+    } else {
+        DebugManager::GetInstance().Log("UISystem", "UISystem initialized successfully");
+    }
 
     m_Running = true;
     return true;

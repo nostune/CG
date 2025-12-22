@@ -3,6 +3,7 @@
 #include "components/PlayerComponent.h"
 #include "components/PlayerInputComponent.h"
 #include "components/CharacterControllerComponent.h"
+#include "components/SpacecraftComponent.h"
 #include "../graphics/components/CameraComponent.h"
 #include "../graphics/components/FreeCameraComponent.h"
 #include "../physics/components/GravityAffectedComponent.h"
@@ -86,6 +87,12 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         if (registry.all_of<components::FreeCameraComponent>(entity)) {
             auto& freeCamera = registry.get<components::FreeCameraComponent>(entity);
             if (freeCamera.isActive) continue;
+        }
+        
+        // 跳过飞船驾驶员（相机由 CameraModeSystem 控制）
+        auto* interaction = registry.try_get<components::PlayerSpacecraftInteractionComponent>(entity);
+        if (interaction && interaction->isPiloting) {
+            continue;
         }
 
         // === 步骤1：更新局部参考系（基于重力方向） ===

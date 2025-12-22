@@ -25,6 +25,12 @@ public:
     bool IsKeyPressed(int key) const;
     bool IsKeyHeld(int key) const;
     bool IsKeyReleased(int key) const;
+    
+    // Mouse delta for spacecraft/free camera control
+    void GetMouseDelta(int& deltaX, int& deltaY) const {
+        deltaX = m_CurrentMousePos.x - m_PreviousMousePos.x;
+        deltaY = m_CurrentMousePos.y - m_PreviousMousePos.y;
+    }
 
 private:
     InputManager() = default;

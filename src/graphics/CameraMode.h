@@ -7,6 +7,7 @@ namespace outer_wilds {
 /// </summary>
 enum class CameraMode {
     Player,     // 玩家第一人称视角（受物理和重力影响）
+    Spacecraft, // 飞船第一人称视角
     Free        // 自由视角（调试/浏览模式，无物理约束）
 };
 

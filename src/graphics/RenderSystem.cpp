@@ -4,6 +4,8 @@
 #include "components/CameraComponent.h"
 #include "../scene/components/TransformComponent.h"
 #include "../core/DebugManager.h"
+#include "../core/Engine.h"
+#include "../ui/UISystem.h"
 #include <DirectXMath.h>
 #include <d3d11.h>
 
@@ -43,6 +45,11 @@ void RenderSystem::Update(float deltaTime, entt::registry& registry) {
 
     // Render all entities
     RenderScene(camera, scenePtr->GetRegistry(), shouldDebug);
+
+    // Render UI (after scene, before Present)
+    if (auto uiSystem = Engine::GetInstance().GetUISystem()) {
+        uiSystem->Render();
+    }
 
     m_Backend->EndFrame();
     m_Backend->Present();

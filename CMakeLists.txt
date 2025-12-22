@@ -48,9 +48,21 @@ target_link_libraries(OuterWildsECS PRIVATE unofficial::omniverse-physx-sdk::sdk
 find_package(assimp CONFIG REQUIRED)
 target_link_libraries(OuterWildsECS PRIVATE assimp::assimp)
 
+# Find ImGui
+find_package(imgui CONFIG REQUIRED)
+target_link_libraries(OuterWildsECS PRIVATE imgui::imgui)
+
+# Find minimp3 (header-only)
+find_path(MINIMP3_INCLUDE_DIRS "minimp3/minimp3.h")
+target_include_directories(OuterWildsECS PRIVATE ${MINIMP3_INCLUDE_DIRS})
+
+# Find stb (header-only for image loading)
+find_path(STB_INCLUDE_DIRS "stb_image.h")
+target_include_directories(OuterWildsECS PRIVATE ${STB_INCLUDE_DIRS})
+
 # Add Windows libraries and compiler flags
 if(WIN32)
-    target_link_libraries(OuterWildsECS PRIVATE d3d11 dxgi d3dcompiler)
+    target_link_libraries(OuterWildsECS PRIVATE d3d11 dxgi d3dcompiler xaudio2)
     # Add /FS flag for MSVC to allow multiple CL.EXE to write to the same PDB file
     if(MSVC)
         target_compile_options(OuterWildsECS PRIVATE /FS)

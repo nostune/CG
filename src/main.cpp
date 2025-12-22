@@ -1,7 +1,11 @@
 #include "core/Engine.h"
 #include "core/DebugManager.h"
+#include "audio/AudioSystem.h"
+#include "ui/UISystem.h"
 #include "scene/Scene.h"
 #include "scene/SceneAssetLoader.h"
+#include <imgui.h>
+#include <imgui_impl_win32.h>
 #include "scene/components/TransformComponent.h"
 #include "graphics/components/RenderableComponent.h"
 #include "graphics/components/RenderPriorityComponent.h"
@@ -13,11 +17,13 @@
 #include "gameplay/components/PlayerAlignmentComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
 #include "gameplay/components/OrbitComponent.h"
+#include "gameplay/components/SpacecraftComponent.h"
 #include "physics/components/ReferenceFrameComponent.h"
 #include "physics/components/GravitySourceComponent.h"
 #include "physics/components/GravityAffectedComponent.h"
 #include "physics/components/RigidBodyComponent.h"
 #include "physics/components/GravityAlignmentComponent.h"
+#include "physics/components/DynamicAttachComponent.h"
 #include "graphics/resources/Material.h"
 #include "graphics/resources/Shader.h"
 #include "graphics/resources/TextureLoader.h"
@@ -25,9 +31,14 @@
 #include "graphics/RenderSystem.h"
 #include "physics/PhysXManager.h"
 #include <PxPhysicsAPI.h>
+#include <imgui.h>
+#include <imgui_impl_win32.h>
 #include <Windows.h>
 #include <iostream>
 #include <sstream>
+
+// Forward declare ImGui's Win32 message handler
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Function to create and redirect IO to a console
 void CreateDebugConsole() {
@@ -46,12 +57,17 @@ void CreateDebugConsole() {
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // Let ImGui handle the message first
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam))
+        return true;
+    
     switch (uMsg) {
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
         case WM_CLOSE:
             outer_wilds::Engine::GetInstance().Stop();
+            PostQuitMessage(0);
             return 0;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -303,24 +319,24 @@ int main(int argc, char* argv[]) {
                 outer_wilds::DebugManager::GetInstance().Log("Main", "Planet has no RigidBodyComponent!");
             }
             
-            // 【测试】添加轨道组件 - 禁用公转测试静态情况
+            // 【测试】添加轨道组件 - 启用公转
             auto& planetOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(planetEntity);
             planetOrbit.centerEntity = entt::null;  // 围绕世界原点
             planetOrbit.radius = 100.0f;  // 100米轨道半径
             planetOrbit.period = 60.0f;   // 60秒一圈（慢速，方便观察）
             planetOrbit.currentAngle = 0.0f;  // 从X轴正方向开始
-            planetOrbit.isActive = false;  // 禁用公转测试静态情况
+            planetOrbit.isActive = true;  // 启用公转
             
             // 添加参考系组件（使行星成为可附着的参考系）
             auto& planetRefFrame = scene->GetRegistry().emplace<outer_wilds::components::ReferenceFrameComponent>(planetEntity);
             planetRefFrame.name = "Earth";
             planetRefFrame.isActive = true;
             
-            // 将地球放在原点
+            // 将地球放在轨道初始位置（角度0 = X轴正方向）
             auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
-            planetTransform.position.x = 0.0f;
+            planetTransform.position.x = planetOrbit.radius * cosf(planetOrbit.currentAngle);  // 100 * cos(0) = 100
             planetTransform.position.y = 0.0f;
-            planetTransform.position.z = 0.0f;
+            planetTransform.position.z = planetOrbit.radius * sinf(planetOrbit.currentAngle);  // 100 * sin(0) = 0
             
             std::stringstream orbitLog;
             orbitLog << "TEST: Planet orbit enabled at (" << planetTransform.position.x 
@@ -356,119 +372,6 @@ int main(int argc, char* argv[]) {
                   << ", " << playerTransform.position.y 
                   << ", " << playerTransform.position.z << ")";
         outer_wilds::DebugManager::GetInstance().Log("Main", playerLog.str());
-
-        // ========================================
-        // 创建测试刚体（使用player.obj作为简单测试模型）
-        // ========================================
-        outer_wilds::DebugManager::GetInstance().Log("Main", "=== Creating Test RigidBody (player.obj) ===");
-        
-        // 测试刚体位置：在地球表面，玩家附近
-        DirectX::XMFLOAT3 testRigidBodyPosition = playerTransform.position;
-        testRigidBodyPosition.x += 3.0f;  // 在玩家右侧3米处
-        
-        const float TEST_RIGIDBODY_SCALE = 0.3f;  // 缩放比例
-        
-        // 使用SceneAssetLoader加载模型（不带物理，我们手动添加）
-        entt::entity testRigidBodyEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
-            scene->GetRegistry(),
-            scene,
-            engine.GetRenderSystem()->GetBackend()->GetDevice(),
-            "assets/BlendObj/player.obj",
-            "",  // 不指定纹理，使用MTL
-            testRigidBodyPosition,
-            DirectX::XMFLOAT3(TEST_RIGIDBODY_SCALE, TEST_RIGIDBODY_SCALE, TEST_RIGIDBODY_SCALE),
-            nullptr  // 不使用内置物理，我们手动添加
-        );
-        
-        if (testRigidBodyEntity != entt::null) {
-            // 创建PhysX刚体（使用胶囊体碰撞盒，和玩家一样）
-            auto* pxPhysics = outer_wilds::PhysXManager::GetInstance().GetPhysics();
-            auto* pxScene = outer_wilds::PhysXManager::GetInstance().GetScene();
-            
-            // 创建高摩擦材质（防止滑动）
-            physx::PxMaterial* testRBMaterial = pxPhysics->createMaterial(
-                1.5f,   // static friction（高静摩擦）
-                1.0f,   // dynamic friction
-                0.0f    // restitution（零弹性）
-            );
-            
-            // 胶囊体参数（和玩家一样）
-            // player.obj 尺寸：1m x 3.6m x 1m（Y轴从-1.8到1.8）
-            // 缩放后：0.3m x 1.08m x 0.3m
-            // 胶囊体：高度约1.0m，半径0.15m
-            float capsuleRadius = 0.15f;  // 半径
-            float capsuleHalfHeight = 0.35f;  // 半高（不包括两端半球）
-            physx::PxCapsuleGeometry capsuleGeom(capsuleRadius, capsuleHalfHeight);
-            
-            // 创建Dynamic Actor
-            physx::PxTransform pxTransform(
-                physx::PxVec3(testRigidBodyPosition.x, testRigidBodyPosition.y, testRigidBodyPosition.z));
-            physx::PxRigidDynamic* testRBActor = pxPhysics->createRigidDynamic(pxTransform);
-            
-            // 创建并附加碰撞形状
-            physx::PxShape* testRBShape = pxPhysics->createShape(capsuleGeom, *testRBMaterial);
-            testRBActor->attachShape(*testRBShape);
-            testRBShape->release();
-            
-            // 设置质量
-            physx::PxRigidBodyExt::updateMassAndInertia(*testRBActor, 70.0f);  // 70kg（人类体重）
-            
-            // === 关键：防止旋转和滑动 ===
-            // 1. 锁定旋转自由度（防止翻滚）
-            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_X, true);
-            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y, true);
-            testRBActor->setRigidDynamicLockFlag(physx::PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z, true);
-            
-            // 2. 设置高阻尼（防止滑动）
-            testRBActor->setLinearDamping(2.0f);   // 高线性阻尼
-            testRBActor->setAngularDamping(5.0f);  // 极高角速度阻尼
-            
-            // 3. 启用CCD（防止穿透）
-            testRBActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
-            
-            // 4. 设置休眠阈值（快速稳定）
-            testRBActor->setSleepThreshold(0.1f);
-            testRBActor->setStabilizationThreshold(0.05f);
-            
-            // 添加到场景
-            pxScene->addActor(*testRBActor);
-            
-            // 添加RigidBodyComponent
-            auto& testRBRigidBody = scene->GetRegistry().emplace<outer_wilds::RigidBodyComponent>(testRigidBodyEntity);
-            testRBRigidBody.mass = 70.0f;
-            testRBRigidBody.useGravity = true;
-            testRBRigidBody.isKinematic = false;
-            testRBRigidBody.drag = 2.0f;
-            testRBRigidBody.angularDrag = 5.0f;
-            testRBRigidBody.physxActor = testRBActor;
-            
-            // 添加重力影响组件
-            auto& testRBGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(testRigidBodyEntity);
-            testRBGravity.affectedByGravity = true;
-            testRBGravity.gravityScale = 1.0f;
-            
-            // 添加参考系附着组件
-            auto& testRBAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(testRigidBodyEntity);
-            testRBAttached.autoAttach = true;
-            testRBAttached.enableCompensation = true;
-            
-            // 添加重力对齐组件（静态物体：强制对齐防止滑动）
-            auto& testRBAlignment = scene->GetRegistry().emplace<outer_wilds::components::GravityAlignmentComponent>(testRigidBodyEntity);
-            testRBAlignment.mode = outer_wilds::components::GravityAlignmentComponent::AlignmentMode::FORCE_ALIGN;
-            testRBAlignment.alignmentSpeed = 0.0f;  // 瞬间对齐
-            
-            std::stringstream testRBLog;
-            testRBLog << "TEST RIGIDBODY (player.obj) created at (" << testRigidBodyPosition.x
-                     << ", " << testRigidBodyPosition.y
-                     << ", " << testRigidBodyPosition.z << ") with capsule collider r=" << capsuleRadius 
-                     << " h=" << (capsuleHalfHeight * 2.0f + capsuleRadius * 2.0f);
-            outer_wilds::DebugManager::GetInstance().Log("Main", testRBLog.str());
-            std::cout << "[Main] Test RigidBody created successfully!" << std::endl;
-        } else {
-            outer_wilds::DebugManager::GetInstance().Log("Main", "ERROR: Failed to load player.obj for test RigidBody!");
-            std::cout << "[Main] ERROR: player.obj load failed!" << std::endl;
-        }
-
 
         // ========================================
         // 继续配置玩家组件
@@ -578,8 +481,166 @@ int main(int argc, char* argv[]) {
         playerAttached.autoAttach = true;  // 自动附着到当前重力源
         playerAttached.enableCompensation = true;
         
+        // 添加飞船交互组件
+        scene->GetRegistry().emplace<outer_wilds::components::PlayerSpacecraftInteractionComponent>(playerEntity);
+        
         // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
         outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
+        
+        // ========================================
+        // 创建飞船（使用 FBX 模型）
+        // ========================================
+        {
+            // 飞船位置：在玩家附近，行星表面上方
+            // 使用球坐标计算，放在地球表面上方，与玩家相邻
+            const float SPACECRAFT_SURFACE_OFFSET = 1.5f;  // 比地表高1.5米（贴近地面）
+            
+            // 飞船位置计算：从地球中心沿Y+方向（和玩家相同）但在X方向偏移一些
+            // 使用向量计算确保在球面上
+            DirectX::XMFLOAT3 spacecraftDirection = { 0.3f, 1.0f, 0.0f };  // 略偏向X
+            float dirLength = sqrtf(spacecraftDirection.x * spacecraftDirection.x + 
+                                    spacecraftDirection.y * spacecraftDirection.y + 
+                                    spacecraftDirection.z * spacecraftDirection.z);
+            spacecraftDirection.x /= dirLength;
+            spacecraftDirection.y /= dirLength;
+            spacecraftDirection.z /= dirLength;
+            
+            float spacecraftHeight = PLANET_ACTUAL_RADIUS + SPACECRAFT_SURFACE_OFFSET;
+            DirectX::XMFLOAT3 spacecraftPosition = {
+                planetTransform.position.x + spacecraftDirection.x * spacecraftHeight,
+                planetTransform.position.y + spacecraftDirection.y * spacecraftHeight,
+                planetTransform.position.z + spacecraftDirection.z * spacecraftHeight
+            };
+            
+            std::cout << "[Main] Creating Spacecraft at (" 
+                     << spacecraftPosition.x << ", " << spacecraftPosition.y << ", " << spacecraftPosition.z
+                     << ")" << std::endl;
+            
+            // 飞船缩放（FBX模型较大，需要缩小）
+            const float SPACECRAFT_SCALE = 0.02f;  // 缩小到2%
+            
+            // 使用 SceneAssetLoader 加载飞船模型（带多纹理）
+            entt::entity spacecraftEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+                scene->GetRegistry(),
+                scene,
+                engine.GetRenderSystem()->GetBackend()->GetDevice(),
+                "assets/models/spacecraft/base.fbx",
+                "",  // 不指定纹理，FBX 内嵌或自动查找
+                spacecraftPosition,
+                DirectX::XMFLOAT3(SPACECRAFT_SCALE, SPACECRAFT_SCALE, SPACECRAFT_SCALE),
+                nullptr  // 物理稍后手动添加
+            );
+            
+            if (spacecraftEntity != entt::null) {
+                std::cout << "[Main] Spacecraft model loaded successfully!" << std::endl;
+                
+                // 修正飞船旋转：FBX模型可能是竖直的，需要绕X轴旋转-90度使其水平
+                auto& spacecraftTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(spacecraftEntity);
+                // 四元数表示绕X轴旋转-90度 (使Y轴朝上变为Z轴朝前)
+                float angle = -DirectX::XM_PIDIV2;  // -90度
+                spacecraftTransform.rotation = DirectX::XMFLOAT4(
+                    sinf(angle * 0.5f), 0.0f, 0.0f, cosf(angle * 0.5f)
+                );
+                
+                // 添加飞船组件
+                auto& spacecraft = scene->GetRegistry().emplace<outer_wilds::components::SpacecraftComponent>(spacecraftEntity);
+                spacecraft.thrustPower = 10.0f;  // 水平推力（降低）
+                spacecraft.verticalThrustPower = 15.0f;  // 垂直推力（刚好能克服重力）
+                spacecraft.angularAcceleration = 2.0f;  // 降低角加速度
+                spacecraft.maxAngularSpeed = 1.5f;  // 降低最大角速度
+                spacecraft.angularDamping = 2.5f;
+                spacecraft.mouseSensitivity = 0.15f;
+                spacecraft.interactionDistance = 10.0f;  // 10米交互距离
+                spacecraft.exitOffset = { 3.0f, 0.0f, 0.0f };
+                spacecraft.cameraOffset = { 0.0f, 2.0f, 0.0f };  // 座舱位置
+                spacecraft.landingAssistAltitude = 15.0f;  // 15米高度阈值（适合小星球）
+                
+                // 添加重力影响组件
+                auto& spacecraftGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(spacecraftEntity);
+                spacecraftGravity.affectedByGravity = true;
+                spacecraftGravity.gravityScale = 1.0f;
+                
+                // 添加重力对齐组件（飞船使用 ASSIST_ALIGN 模式）
+                auto& spacecraftAlignment = scene->GetRegistry().emplace<outer_wilds::components::GravityAlignmentComponent>(spacecraftEntity);
+                spacecraftAlignment.mode = outer_wilds::components::GravityAlignmentComponent::AlignmentMode::ASSIST_ALIGN;
+                spacecraftAlignment.alignmentSpeed = 2.0f;
+                
+                // 添加参考系组件
+                auto& spacecraftAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(spacecraftEntity);
+                spacecraftAttached.autoAttach = true;
+                spacecraftAttached.enableCompensation = true;
+                spacecraftAttached.staticAttach = true;  // 初始静态吸附（停在地面）
+                spacecraftAttached.isSpacecraft = true;  // 标记为飞船！
+                
+                // 初始化参考系附着（附着到地球）
+                spacecraftAttached.referenceFrame = planetEntity;
+                // 计算本地偏移量 = 飞船位置 - 地球位置
+                spacecraftAttached.localOffset = {
+                    spacecraftPosition.x - planetTransform.position.x,
+                    spacecraftPosition.y - planetTransform.position.y,
+                    spacecraftPosition.z - planetTransform.position.z
+                };
+                spacecraftAttached.isInitialized = true;
+                
+                std::cout << "[Main] Spacecraft attached to planet with localOffset=("
+                         << spacecraftAttached.localOffset.x << ", "
+                         << spacecraftAttached.localOffset.y << ", "
+                         << spacecraftAttached.localOffset.z << ")" << std::endl;
+                
+                // 添加动态吸附组件（用于降落后固定）
+                auto& spacecraftDynAttach = scene->GetRegistry().emplace<outer_wilds::components::DynamicAttachComponent>(spacecraftEntity);
+                spacecraftDynAttach.currentState = outer_wilds::components::DynamicAttachComponent::State::DYNAMIC;
+                spacecraftDynAttach.groundCheckDistance = 2.0f;
+                spacecraftDynAttach.velocityThreshold = 0.5f;
+                spacecraftDynAttach.groundedStableTime = 1.0f;
+                
+                // 创建 PhysX 刚体
+                auto* pxPhysics = outer_wilds::PhysXManager::GetInstance().GetPhysics();
+                auto* pxScene = outer_wilds::PhysXManager::GetInstance().GetScene();
+                
+                const float SPACECRAFT_MASS = 300.0f;  // 增加质量
+                const float SPACECRAFT_LINEAR_DRAG = 0.3f;  // 增加阻力
+                const float SPACECRAFT_ANGULAR_DRAG = 1.5f;
+                
+                physx::PxMaterial* spacecraftMaterial = pxPhysics->createMaterial(0.5f, 0.5f, 0.1f);
+                
+                // 使用盒子碰撞器，尺寸根据飞船模型调整
+                physx::PxShape* spacecraftShape = pxPhysics->createShape(
+                    physx::PxBoxGeometry(3.0f, 1.5f, 4.0f),  // 6m x 3m x 8m 的盒子
+                    *spacecraftMaterial
+                );
+                
+                physx::PxTransform spacecraftPose(
+                    physx::PxVec3(spacecraftPosition.x, spacecraftPosition.y, spacecraftPosition.z)
+                );
+                
+                physx::PxRigidDynamic* spacecraftActor = pxPhysics->createRigidDynamic(spacecraftPose);
+                spacecraftActor->attachShape(*spacecraftShape);
+                physx::PxRigidBodyExt::updateMassAndInertia(*spacecraftActor, SPACECRAFT_MASS);
+                spacecraftActor->setLinearDamping(SPACECRAFT_LINEAR_DRAG);
+                spacecraftActor->setAngularDamping(SPACECRAFT_ANGULAR_DRAG);
+                
+                // 设置为 Kinematic 模式（与 staticAttach = true 对应）
+                // 这样在玩家输入起飞命令前，飞船会保持静止附着在地面
+                spacecraftActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, true);
+                
+                pxScene->addActor(*spacecraftActor);
+                
+                // 添加刚体组件
+                auto& spacecraftRigidBody = scene->GetRegistry().emplace<outer_wilds::RigidBodyComponent>(spacecraftEntity);
+                spacecraftRigidBody.physxActor = spacecraftActor;
+                spacecraftRigidBody.mass = SPACECRAFT_MASS;
+                spacecraftRigidBody.drag = SPACECRAFT_LINEAR_DRAG;
+                spacecraftRigidBody.angularDrag = SPACECRAFT_ANGULAR_DRAG;
+                spacecraftRigidBody.useGravity = false;
+                spacecraftRigidBody.isKinematic = true;  // 与 PhysX actor 的 kinematic 标志同步
+                
+                std::cout << "[Main] Spacecraft created! Press E near it to enter." << std::endl;
+                std::cout << "[Main] Spacecraft controls: WASD=move, Mouse=look, Shift/Ctrl=up/down, L=landing assist" << std::endl;
+            } else {
+                std::cout << "[Main] ERROR: Failed to load spacecraft model!" << std::endl;
+            }
+        }
         
         // ========================================
         // 创建月球(地球卫星)
@@ -650,6 +711,106 @@ int main(int argc, char* argv[]) {
         outer_wilds::DebugManager::GetInstance().ForcePrint();
         std::cout << "===================\n" << std::endl;
         
+        // ========================================
+        // 启动流程：欢迎界面 -> 等待按键 -> 进入游戏
+        // ========================================
+        
+        // 1. 显示欢迎界面（等待按键）
+        if (auto uiSystem = engine.GetUISystem()) {
+            uiSystem->ShowWelcomeScreenWithKeyWait("C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\ui\\kkstudio1.jpg");
+            outer_wilds::DebugManager::GetInstance().Log("Main", "Welcome screen displayed, waiting for key press");
+        }
+        
+        // 2. 播放欢迎音乐（02 - Outer Wilds.mp3）
+        if (auto audioSystem = engine.GetAudioSystem()) {
+            if (audioSystem->PlaySingleTrack("C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Outer Wilds (Original Soundtrack)\\02 - Outer Wilds.mp3")) {
+                outer_wilds::DebugManager::GetInstance().Log("Main", "Welcome music started");
+            }
+        }
+        
+        // 3. 主循环 - 等待按键
+        bool welcomeFinished = false;
+        bool shouldExit = false;
+        while (engine.GetUISystem() && engine.GetUISystem()->IsWelcomeScreenVisible() && !shouldExit) {
+            // 处理消息
+            MSG msg = {};
+            while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+                if (msg.message == WM_QUIT) {
+                    shouldExit = true;
+                    engine.Stop();
+                    break;
+                }
+            }
+            
+            // 更新引擎（让UI和音频系统工作）
+            outer_wilds::TimeManager::GetInstance().Update();
+            float deltaTime = outer_wilds::TimeManager::GetInstance().GetDeltaTime();
+            
+            auto& registry = scene->GetRegistry();
+            // 更新UI和音频系统
+            if (auto uiSys = engine.GetUISystem()) {
+                uiSys->Update(deltaTime, registry);
+            }
+            if (auto audioSys = engine.GetAudioSystem()) {
+                audioSys->Update(deltaTime, registry);
+            }
+            
+            // 渲染欢迎界面
+            if (auto renderSystem = engine.GetRenderSystem()) {
+                auto renderBackend = renderSystem->GetBackend();
+                if (renderBackend) {
+                    auto context = static_cast<ID3D11DeviceContext*>(renderBackend->GetContext());
+                    auto renderTargetView = static_cast<ID3D11RenderTargetView*>(renderBackend->GetRenderTargetView());
+                    auto depthStencilView = static_cast<ID3D11DepthStencilView*>(renderBackend->GetDepthStencilView());
+                    
+                    if (context && renderTargetView && depthStencilView) {
+                        context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
+                        float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+                        context->ClearRenderTargetView(renderTargetView, clearColor);
+                        context->ClearDepthStencilView(depthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+                    }
+                }
+                
+                if (auto uiSystem = engine.GetUISystem()) {
+                    uiSystem->Render();
+                }
+                
+                if (renderBackend) {
+                    renderBackend->EndFrame();
+                    renderBackend->Present();
+                }
+            }
+            
+            // 检查是否按下按键
+            if (engine.GetUISystem() && engine.GetUISystem()->WasKeyPressed()) {
+                welcomeFinished = true;
+                outer_wilds::DebugManager::GetInstance().Log("Main", "Key pressed, transitioning to game");
+                break;
+            }
+        }
+        
+        // 如果用户选择退出，直接跳过后续流程
+        if (shouldExit) {
+            engine.Shutdown();
+            return 0;
+        }
+        
+        // 4. 切换到游戏音乐
+        if (welcomeFinished) {
+            if (auto audioSystem = engine.GetAudioSystem()) {
+                std::string musicFolder = "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Outer Wilds (Original Soundtrack)";
+                if (audioSystem->LoadPlaylistFromDirectory(musicFolder)) {
+                    audioSystem->SetLoopPlaylist(true);
+                    audioSystem->Play();
+                    outer_wilds::DebugManager::GetInstance().Log("Main", "Game music started");
+                }
+            }
+        }
+        
+        // 5. 进入正常游戏循环
+        outer_wilds::DebugManager::GetInstance().Log("Main", "Entering main game loop");
         engine.Run();
     }
     

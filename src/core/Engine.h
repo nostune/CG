@@ -17,6 +17,8 @@ class FreeCameraSystem;
 class CameraModeSystem;
 class OrbitSystem;
 class ReferenceFrameSystem;
+class AudioSystem;
+class UISystem;
 
 class Engine {
 public:
@@ -39,6 +41,9 @@ public:
 
     SceneManager* GetSceneManager() { return m_SceneManager.get(); }
     RenderSystem* GetRenderSystem() { return m_RenderSystem.get(); }
+    CameraModeSystem* GetCameraModeSystem() { return m_CameraModeSystem.get(); }
+    AudioSystem* GetAudioSystem() { return m_AudioSystem.get(); }
+    UISystem* GetUISystem() { return m_UISystem.get(); }
 
 private:
     Engine() = default;
@@ -66,6 +71,8 @@ private:
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
     std::shared_ptr<OrbitSystem> m_OrbitSystem;
+    std::shared_ptr<AudioSystem> m_AudioSystem;
+    std::shared_ptr<UISystem> m_UISystem;
 
     // Common resources
     std::shared_ptr<resources::Mesh> m_PlanetMesh;

@@ -31,6 +31,12 @@ struct ReferenceFrameComponent {
     /** 计算得出的线性速度（米/秒），用于调试 */
     DirectX::XMFLOAT3 velocity = {0.0f, 0.0f, 0.0f};
     
+    /** 上一帧的速度（用于计算速度变化） */
+    DirectX::XMFLOAT3 lastVelocity = {0.0f, 0.0f, 0.0f};
+    
+    /** 当前帧的速度变化（用于参考系补偿） */
+    DirectX::XMFLOAT3 deltaVelocity = {0.0f, 0.0f, 0.0f};
+    
     /** 是否已初始化（第一帧需要记录初始位置） */
     bool isInitialized = false;
 };
@@ -43,10 +49,10 @@ struct ReferenceFrameComponent {
  * 2. 每帧：物体全局位置 = 天体位置 + 本地坐标
  * 3. 物理模拟后，更新本地坐标以反映物理运动
  * 
- * 优势：
- * - 完全消除累积误差（不用位移增量）
- * - 物体精确跟随天体圆弧运动
- * - 物理运动正常工作
+ * 静态吸附模式（staticAttach = true）：
+ * - 物体完全不受物理影响
+ * - 只更新 Transform，不触碰 PhysX 刚体
+ * - 适用于装饰物体、NPC 等不可交互物体
  */
 struct AttachedToReferenceFrameComponent {
     /** 附着的参考系实体（通常是当前重力源） */
@@ -63,6 +69,29 @@ struct AttachedToReferenceFrameComponent {
     
     /** 是否启用位置同步 */
     bool enableCompensation = true;
+    
+    /** 
+     * 静态吸附模式
+     * - true: 物体完全不受物理影响，只更新 Transform
+     * - false: 物体受物理影响，通过 PhysX 同步位置（默认）
+     */
+    bool staticAttach = false;
+    
+    /**
+     * 是否为飞船（特殊处理）
+     * - true: 飞船，只在驾驶时启用物理，下船后触地吸附
+     * - false: 普通刚体，强制静态吸附，不参与物理模拟
+     * 
+     * 设计说明：
+     * 除飞船外的所有刚体都强制静态吸附，规避 PhysX 不能单独设置参考系的问题
+     */
+    bool isSpacecraft = false;
+    
+    /**
+     * 触地稳定计时器（仅飞船使用）
+     * 用于检测飞船是否满足触地吸附条件
+     */
+    float groundStableTime = 0.0f;
 };
 
 } // namespace components
