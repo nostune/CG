@@ -195,10 +195,12 @@ components::CameraComponent* RenderSystem::FindActiveCamera(entt::registry& regi
     components::CameraComponent* activeCamera = nullptr;
 
     // Find any entity with an active CameraComponent
-    auto view = registry.view<components::CameraComponent, TransformComponent>();
-    view.each([&](auto entity, auto& cam, auto& trans) {
+    // 注意：不再用 TransformComponent.position 覆盖 camera.position
+    // 玩家相机由 PlayerSystem 直接设置 camera.position/target
+    // 自由相机由 FreeCameraSystem 设置
+    auto view = registry.view<components::CameraComponent>();
+    view.each([&](auto entity, auto& cam) {
         if (cam.isActive) {
-            cam.position = trans.position;
             activeCamera = &cam;
         }
     });

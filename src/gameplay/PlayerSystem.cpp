@@ -190,10 +190,13 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         float gravityStrength = (gravity && gravity->affectedByGravity) ? 
             gravity->currentGravityStrength * gravity->gravityScale : 20.0f;
         
-        // 使用PhysX原生接地检测（现在up方向已正确设置）
-        physx::PxControllerState state;
-        character.controller->getState(state);
-        character.isGrounded = (state.collisionFlags & physx::PxControllerCollisionFlag::eCOLLISION_DOWN) != 0;
+        // 注意：isGrounded 在上一帧的 move() 之后已设置
+        // 如果是第一帧，默认假设在地面（避免初始下坠）
+        static bool firstFrame = true;
+        if (firstFrame) {
+            character.isGrounded = true;
+            firstFrame = false;
+        }
         
         if (character.wantsToJump && character.isGrounded) {
             character.verticalVelocity = character.jumpSpeed;
@@ -218,12 +221,19 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         DirectX::XMStoreFloat3(&disp, displacementVec);
         physx::PxVec3 displacement(disp.x, disp.y, disp.z);
         
-        // Move the character controller
+        // Move the character controller with collision detection
+        // 使用默认过滤器，会与所有形状发生碰撞
         physx::PxControllerFilters filters;
-        character.controller->move(displacement, 0.0001f, deltaTime, filters);
+        // 设置过滤回调为 nullptr，使用默认行为（与所有物体碰撞）
+        filters.mFilterCallback = nullptr;
+        filters.mCCTFilterCallback = nullptr;
+        // 不设置 mFilterData，使用默认值（与所有物体碰撞）
         
-        // Note: isGrounded is now set by custom raycast ground detection above
-        // (Removed PhysX's world-space collision detection as it fails on spherical surfaces)
+        physx::PxControllerCollisionFlags collisionFlags = character.controller->move(
+            displacement, 0.0001f, deltaTime, filters);
+        
+        // 更新接地状态（基于碰撞标志）
+        character.isGrounded = collisionFlags.isSet(physx::PxControllerCollisionFlag::eCOLLISION_DOWN);
         
         // Re-query foot position after move (it may have changed)
         physx::PxExtendedVec3 pos = character.controller->getFootPosition();
@@ -238,19 +248,9 @@ void PlayerSystem::UpdatePlayerMovement(float deltaTime, entt::registry& registr
         DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(eyePos, finalDirection);
         DirectX::XMStoreFloat3(&camera.target, targetPos);
         
-        // === 同步视觉模型实体位置 ===
-        // 始终同步视觉模型（即使在自由相机模式下也要更新，这样才能看到玩家跟随天体移动）
-        auto* playerComp = registry.try_get<PlayerComponent>(entity);
-        if (playerComp && playerComp->visualModelEntity != entt::null) {
-            auto* modelTransform = registry.try_get<TransformComponent>(playerComp->visualModelEntity);
-            if (modelTransform) {
-                // 视觉模型位置 = 脚位置 (不是眼睛位置)
-                DirectX::XMStoreFloat3(&modelTransform->position, footPos);
-                
-                // 可选: 根据移动方向旋转模型
-                // 这里暂时不旋转,保持默认朝向
-            }
-        }
+        // === 玩家可视模型位置由 SectorSystem.PostPhysicsUpdate 统一处理 ===
+        // 不在这里设置，避免坐标系混乱
+        // SectorSystem 会将局部坐标转换为世界坐标
         
         // Reset inputs
         character.forwardInput = 0.0f;

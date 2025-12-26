@@ -2,6 +2,7 @@
 #include "PhysXManager.h"
 #include "../physics/components/RigidBodyComponent.h"
 #include "../physics/components/ColliderComponent.h"
+#include "../physics/components/SectorComponent.h"
 #include "../scene/components/TransformComponent.h"
 
 namespace outer_wilds {
@@ -59,6 +60,17 @@ void PhysicsSystem::SyncPhysicsToTransforms(entt::registry& registry) {
         auto& rigidBody = view.get<RigidBodyComponent>(entity);
         auto& transform = view.get<TransformComponent>(entity);
         
+        // 跳过 Sector 实体 - 它们的物理位置由 SectorSystem 特殊管理
+        // Sector 的 TransformComponent 保持世界坐标，而物理体在原点
+        if (registry.all_of<components::SectorComponent>(entity)) {
+            continue;
+        }
+        
+        // 跳过在 Sector 中的实体 - 它们的 TransformComponent 由 SectorSystem.PostPhysicsUpdate 管理
+        if (registry.all_of<components::InSectorComponent>(entity)) {
+            continue;
+        }
+        
         if (rigidBody.physxActor) {
             // Get transform from PhysX actor
             physx::PxTransform pxTransform = rigidBody.physxActor->getGlobalPose();
@@ -76,6 +88,12 @@ void PhysicsSystem::SyncTransformsToPhysics(entt::registry& registry) {
     for (auto entity : view) {
         auto& rigidBody = view.get<RigidBodyComponent>(entity);
         auto& transform = view.get<TransformComponent>(entity);
+        
+        // 跳过 Sector 实体 - 它们的物理位置由 SectorSystem 特殊管理
+        // Sector 的物理体需要保持在原点 (0,0,0)，不能同步到 TransformComponent
+        if (registry.all_of<components::SectorComponent>(entity)) {
+            continue;
+        }
         
         if (rigidBody.physxActor && rigidBody.isKinematic) {
             // Update PhysX actor from our transform

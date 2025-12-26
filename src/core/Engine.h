@@ -16,6 +16,7 @@ class PlayerAlignmentSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
 class OrbitSystem;
+class SectorSystem;
 class AudioSystem;
 class UISystem;
 
@@ -69,6 +70,7 @@ private:
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
     std::shared_ptr<OrbitSystem> m_OrbitSystem;
+    std::shared_ptr<SectorSystem> m_SectorSystem;
     std::shared_ptr<AudioSystem> m_AudioSystem;
     std::shared_ptr<UISystem> m_UISystem;
 

@@ -193,6 +193,26 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
         }
 
         if (pxShape) {
+            // 确保 Shape 支持场景查询（CharacterController 需要这个）
+            // 设置 Shape 的 flags 以确保可以被查询检测到
+            pxShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
+            pxShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+            
+            // 设置查询过滤数据（允许所有类型的查询）
+            physx::PxFilterData queryFilterData;
+            queryFilterData.word0 = 0xFFFFFFFF;  // 可以与所有分组碰撞
+            queryFilterData.word1 = 0xFFFFFFFF;
+            pxShape->setQueryFilterData(queryFilterData);
+            
+            // 设置模拟过滤数据
+            physx::PxFilterData simFilterData;
+            simFilterData.word0 = 0xFFFFFFFF;  // 可以与所有分组碰撞
+            simFilterData.word1 = 0xFFFFFFFF;
+            pxShape->setSimulationFilterData(simFilterData);
+            
+            DebugManager::GetInstance().Log("SceneAssetLoader", 
+                "Shape created with SCENE_QUERY_SHAPE and SIMULATION_SHAPE flags enabled");
+            
             // Add Collider component
             auto& collider = registry.emplace<ColliderComponent>(entity);
             if (physicsOpts->shape == PhysicsOptions::ColliderShape::Sphere) {

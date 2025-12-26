@@ -22,6 +22,7 @@
 #include "physics/components/GravityAffectedComponent.h"
 #include "physics/components/RigidBodyComponent.h"
 #include "physics/components/GravityAlignmentComponent.h"
+#include "physics/components/SectorComponent.h"
 #include "graphics/resources/Material.h"
 #include "graphics/resources/Shader.h"
 #include "graphics/resources/TextureLoader.h"
@@ -325,6 +326,13 @@ int main(int argc, char* argv[]) {
             planetOrbit.currentAngle = 0.0f;  // 从X轴正方向开始
             planetOrbit.isActive = true;  // 启用公转
             
+            // 添加 Sector 组件（使地球成为一个局部坐标系）
+            auto& earthSector = scene->GetRegistry().emplace<outer_wilds::components::SectorComponent>(planetEntity);
+            earthSector.name = "Earth";
+            earthSector.influenceRadius = 200.0f;  // 200米影响范围
+            earthSector.priority = 10;  // 高优先级
+            earthSector.isActive = true;  // 初始为活跃 Sector
+            
             // 将地球放在轨道初始位置（角度0 = X轴正方向）
             auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
             planetTransform.position.x = planetOrbit.radius * cosf(planetOrbit.currentAngle);  // 100 * cos(0) = 100
@@ -456,18 +464,29 @@ int main(int argc, char* argv[]) {
         playerCamera.aspectRatio = 16.0f / 9.0f;
         playerCamera.nearPlane = 0.1f;
         playerCamera.farPlane = 1000.0f;
-        playerCamera.position = playerTransform.position;
-        // 向下看行星中心 (从 y=65.8 看向 y=0)
-        playerCamera.target = {0.0f, 0.0f, 0.0f};
-        playerCamera.up = {0.0f, 0.0f, 1.0f};  // 使用Z轴作为up向量(适应向下看)
+        // 相机位置/目标将由 PlayerSystem 在运行时根据 CharacterController 设置
+        // 这里只设置初始值（会被第一帧覆盖）
+        playerCamera.position = {0.0f, 0.0f, 0.0f};  // 临时值
+        playerCamera.target = {0.0f, 0.0f, 1.0f};    // 临时值
+        playerCamera.up = {0.0f, 1.0f, 0.0f};        // 默认 up
         playerCamera.yaw = 0.0f;
-        playerCamera.pitch = -90.0f;  // 向下90度
+        playerCamera.pitch = 0.0f;
+        playerCamera.relativeYaw = 0.0f;
+        playerCamera.relativePitch = 0.0f;
         playerCamera.moveSpeed = 5.0f;
         playerCamera.lookSensitivity = 0.003f;
         
         // Add player input component
         auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
         playerInput.mouseLookEnabled = true;
+        
+        // 添加 Sector 归属组件（玩家属于地球 Sector）
+        auto& playerInSector = scene->GetRegistry().emplace<outer_wilds::components::InSectorComponent>(playerEntity);
+        playerInSector.currentSector = planetEntity;
+        // 设置为未初始化，让 SectorSystem 在第一帧处理：
+        // 1. 从世界坐标计算局部坐标
+        // 2. 更新 CharacterController 到局部坐标
+        playerInSector.isInitialized = false;
         
         // 添加飞船交互组件
         scene->GetRegistry().emplace<outer_wilds::components::PlayerSpacecraftInteractionComponent>(playerEntity);
