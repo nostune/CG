@@ -18,12 +18,10 @@
 #include "gameplay/components/CharacterControllerComponent.h"
 #include "gameplay/components/OrbitComponent.h"
 #include "gameplay/components/SpacecraftComponent.h"
-#include "physics/components/ReferenceFrameComponent.h"
 #include "physics/components/GravitySourceComponent.h"
 #include "physics/components/GravityAffectedComponent.h"
 #include "physics/components/RigidBodyComponent.h"
 #include "physics/components/GravityAlignmentComponent.h"
-#include "physics/components/DynamicAttachComponent.h"
 #include "graphics/resources/Material.h"
 #include "graphics/resources/Shader.h"
 #include "graphics/resources/TextureLoader.h"
@@ -327,11 +325,6 @@ int main(int argc, char* argv[]) {
             planetOrbit.currentAngle = 0.0f;  // 从X轴正方向开始
             planetOrbit.isActive = true;  // 启用公转
             
-            // 添加参考系组件（使行星成为可附着的参考系）
-            auto& planetRefFrame = scene->GetRegistry().emplace<outer_wilds::components::ReferenceFrameComponent>(planetEntity);
-            planetRefFrame.name = "Earth";
-            planetRefFrame.isActive = true;
-            
             // 将地球放在轨道初始位置（角度0 = X轴正方向）
             auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
             planetTransform.position.x = planetOrbit.radius * cosf(planetOrbit.currentAngle);  // 100 * cos(0) = 100
@@ -476,11 +469,6 @@ int main(int argc, char* argv[]) {
         auto& playerInput = scene->GetRegistry().emplace<outer_wilds::PlayerInputComponent>(playerEntity);
         playerInput.mouseLookEnabled = true;
         
-        // 添加参考系附着组件，让玩家跟随天体运动
-        auto& playerAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(playerEntity);
-        playerAttached.autoAttach = true;  // 自动附着到当前重力源
-        playerAttached.enableCompensation = true;
-        
         // 添加飞船交互组件
         scene->GetRegistry().emplace<outer_wilds::components::PlayerSpacecraftInteractionComponent>(playerEntity);
         
@@ -564,35 +552,6 @@ int main(int argc, char* argv[]) {
                 auto& spacecraftAlignment = scene->GetRegistry().emplace<outer_wilds::components::GravityAlignmentComponent>(spacecraftEntity);
                 spacecraftAlignment.mode = outer_wilds::components::GravityAlignmentComponent::AlignmentMode::ASSIST_ALIGN;
                 spacecraftAlignment.alignmentSpeed = 2.0f;
-                
-                // 添加参考系组件
-                auto& spacecraftAttached = scene->GetRegistry().emplace<outer_wilds::components::AttachedToReferenceFrameComponent>(spacecraftEntity);
-                spacecraftAttached.autoAttach = true;
-                spacecraftAttached.enableCompensation = true;
-                spacecraftAttached.staticAttach = true;  // 初始静态吸附（停在地面）
-                spacecraftAttached.isSpacecraft = true;  // 标记为飞船！
-                
-                // 初始化参考系附着（附着到地球）
-                spacecraftAttached.referenceFrame = planetEntity;
-                // 计算本地偏移量 = 飞船位置 - 地球位置
-                spacecraftAttached.localOffset = {
-                    spacecraftPosition.x - planetTransform.position.x,
-                    spacecraftPosition.y - planetTransform.position.y,
-                    spacecraftPosition.z - planetTransform.position.z
-                };
-                spacecraftAttached.isInitialized = true;
-                
-                std::cout << "[Main] Spacecraft attached to planet with localOffset=("
-                         << spacecraftAttached.localOffset.x << ", "
-                         << spacecraftAttached.localOffset.y << ", "
-                         << spacecraftAttached.localOffset.z << ")" << std::endl;
-                
-                // 添加动态吸附组件（用于降落后固定）
-                auto& spacecraftDynAttach = scene->GetRegistry().emplace<outer_wilds::components::DynamicAttachComponent>(spacecraftEntity);
-                spacecraftDynAttach.currentState = outer_wilds::components::DynamicAttachComponent::State::DYNAMIC;
-                spacecraftDynAttach.groundCheckDistance = 2.0f;
-                spacecraftDynAttach.velocityThreshold = 0.5f;
-                spacecraftDynAttach.groundedStableTime = 1.0f;
                 
                 // 创建 PhysX 刚体
                 auto* pxPhysics = outer_wilds::PhysXManager::GetInstance().GetPhysics();

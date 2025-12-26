@@ -16,7 +16,6 @@ class PlayerAlignmentSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
 class OrbitSystem;
-class ReferenceFrameSystem;
 class AudioSystem;
 class UISystem;
 
@@ -66,7 +65,6 @@ private:
     std::shared_ptr<PlayerSystem> m_PlayerSystem;
     std::shared_ptr<GravitySystem> m_GravitySystem;
     std::shared_ptr<ApplyGravitySystem> m_ApplyGravitySystem;
-    std::shared_ptr<ReferenceFrameSystem> m_ReferenceFrameSystem;
     std::shared_ptr<PlayerAlignmentSystem> m_PlayerAlignmentSystem;
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;

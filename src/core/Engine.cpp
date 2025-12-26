@@ -5,13 +5,9 @@
 #include "../physics/PhysicsSystem.h"
 #include "../physics/GravitySystem.h"
 #include "../physics/ApplyGravitySystem.h"
-#include "../physics/ReferenceFrameSystem.h"
-#include "../physics/DynamicAttachSystem.h"
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
 #include "../gameplay/OrbitSystem.h"
-#include "../gameplay/SpacecraftControlSystem.h"
-#include "../gameplay/SpacecraftInteractionSystem.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
 #include "../audio/AudioSystem.h"
@@ -58,12 +54,6 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     // 轨道系统（在PhysicsSystem之前，更新天体位置）
     m_OrbitSystem = AddSystem<OrbitSystem>();
 
-    // 参考系系统（在OrbitSystem之后，补偿天体运动产生的位移）
-    m_ReferenceFrameSystem = AddSystem<ReferenceFrameSystem>();
-
-    // 动态吸附系统（在ReferenceFrameSystem之后，管理动态物体的状态切换）
-    AddSystem<DynamicAttachSystem>();
-
     // 重力系统（在PhysicsSystem之前，用于计算重力）
     m_GravitySystem = AddSystem<GravitySystem>();
 
@@ -75,10 +65,6 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
-    
-    // 飞船系统（在PlayerSystem之后）
-    AddSystem<SpacecraftControlSystem>();
-    AddSystem<SpacecraftInteractionSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
@@ -165,12 +151,6 @@ void Engine::Update() {
 
     // PhysX物理模拟
     PhysXManager::GetInstance().Update(m_DeltaTime);
-
-    // === 物理模拟后：更新参考系的本地坐标 ===
-    // 这允许物理运动修改物体在天体表面的位置
-    if (m_ReferenceFrameSystem) {
-        m_ReferenceFrameSystem->PostPhysicsUpdate(registry);
-    }
 
     DebugManager::GetInstance().Update(m_DeltaTime);
 }
