@@ -25,11 +25,45 @@ void CameraModeSystem::Initialize(std::shared_ptr<Scene> scene) {
 }
 
 void CameraModeSystem::Update(float deltaTime, entt::registry& registry) {
+    // 检测玩家飞船驾驶状态变化
+    CheckSpacecraftPilotingState(registry);
     CheckModeToggle(registry);
     
     // 如果在飞船模式，更新飞船相机
     if (m_CurrentMode == CameraMode::Spacecraft) {
         UpdateSpacecraftCamera(registry);
+    }
+}
+
+// 检测玩家是否正在驾驶飞船，自动切换相机模式
+void CameraModeSystem::CheckSpacecraftPilotingState(entt::registry& registry) {
+    auto playerView = registry.view<PlayerComponent, PlayerSpacecraftInteractionComponent>();
+    
+    for (auto playerEntity : playerView) {
+        auto& interaction = playerView.get<PlayerSpacecraftInteractionComponent>(playerEntity);
+        
+        if (interaction.isPiloting && interaction.currentSpacecraft != entt::null) {
+            // 验证飞船实体有效
+            if (!registry.valid(interaction.currentSpacecraft)) {
+                std::cout << "[CameraMode] WARNING: Invalid spacecraft entity!" << std::endl;
+                interaction.isPiloting = false;
+                interaction.currentSpacecraft = entt::null;
+                continue;
+            }
+            
+            // 玩家正在驾驶飞船，切换到飞船模式
+            if (m_CurrentMode != CameraMode::Spacecraft || m_CurrentSpacecraft != interaction.currentSpacecraft) {
+                std::cout << "[CameraMode] Switching to spacecraft camera..." << std::endl;
+                SwitchToSpacecraftMode(registry, interaction.currentSpacecraft);
+            }
+        } else {
+            // 玩家不在驾驶飞船，如果当前是飞船模式则切换回玩家模式
+            if (m_CurrentMode == CameraMode::Spacecraft) {
+                std::cout << "[CameraMode] Exiting spacecraft, switching to player camera..." << std::endl;
+                SwitchToPlayerMode(registry);
+            }
+        }
+        break;  // 只处理第一个玩家
     }
 }
 
@@ -212,24 +246,46 @@ void CameraModeSystem::SwitchToSpacecraftMode(entt::registry& registry, entt::en
     auto* spacecraftTransform = registry.try_get<TransformComponent>(spacecraft);
     
     if (spacecraftComp && spacecraftTransform) {
+        // 验证四元数有效性
+        auto& rot = spacecraftTransform->rotation;
+        float quatLengthSq = rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w;
+        
+        DirectX::XMVECTOR spacecraftRot;
+        if (quatLengthSq < 0.001f) {
+            spacecraftRot = DirectX::XMQuaternionIdentity();
+        } else {
+            spacecraftRot = DirectX::XMVector4Normalize(DirectX::XMLoadFloat4(&rot));
+        }
+        
         // 查找玩家相机并更新其位置到飞船位置
-        for (auto playerEntity : playerView) {
-            auto& camera = playerView.get<CameraComponent>(playerEntity);
+        auto playerCameraView = registry.view<PlayerComponent, CameraComponent>();
+        for (auto playerEntity : playerCameraView) {
+            auto* camera = registry.try_get<CameraComponent>(playerEntity);
+            if (!camera) continue;
             
             // 计算飞船内部相机位置
             DirectX::XMVECTOR spacecraftPos = DirectX::XMLoadFloat3(&spacecraftTransform->position);
-            DirectX::XMVECTOR spacecraftRot = DirectX::XMLoadFloat4(&spacecraftTransform->rotation);
             DirectX::XMVECTOR cameraOffset = DirectX::XMLoadFloat3(&spacecraftComp->cameraOffset);
             
             // 旋转偏移
             cameraOffset = DirectX::XMVector3Rotate(cameraOffset, spacecraftRot);
             DirectX::XMVECTOR cameraPos = DirectX::XMVectorAdd(spacecraftPos, cameraOffset);
             
-            DirectX::XMStoreFloat3(&camera.position, cameraPos);
-            camera.yaw = spacecraftComp->yaw;
-            camera.pitch = spacecraftComp->pitch;
-            camera.isActive = true;
+            DirectX::XMStoreFloat3(&camera->position, cameraPos);
             
+            // 从飞船 transform 计算相机方向
+            DirectX::XMVECTOR forward = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), spacecraftRot);
+            DirectX::XMVECTOR up = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 1, 0, 0), spacecraftRot);
+            DirectX::XMVECTOR right = DirectX::XMVector3Rotate(DirectX::XMVectorSet(1, 0, 0, 0), spacecraftRot);
+            
+            DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(cameraPos, forward);
+            DirectX::XMStoreFloat3(&camera->target, targetPos);
+            DirectX::XMStoreFloat3(&camera->up, up);
+            DirectX::XMStoreFloat3(&camera->localUp, up);
+            DirectX::XMStoreFloat3(&camera->localForward, forward);
+            DirectX::XMStoreFloat3(&camera->localRight, right);
+            
+            camera->isActive = true;
             break;
         }
     }
@@ -266,9 +322,19 @@ void CameraModeSystem::UpdateSpacecraftCamera(entt::registry& registry) {
     for (auto playerEntity : playerView) {
         auto& camera = playerView.get<CameraComponent>(playerEntity);
         
-        // 计算飞船内部相机位置
+        // 使用飞船的世界坐标（TransformComponent 已被 SectorSystem 更新为世界坐标）
         DirectX::XMVECTOR spacecraftPos = DirectX::XMLoadFloat3(&spacecraftTransform->position);
-        DirectX::XMVECTOR spacecraftRot = DirectX::XMLoadFloat4(&spacecraftTransform->rotation);
+        
+        // 验证四元数有效性
+        const auto& rot = spacecraftTransform->rotation;
+        float quatLengthSq = rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w;
+        DirectX::XMVECTOR spacecraftRot;
+        if (quatLengthSq < 0.001f) {
+            spacecraftRot = DirectX::XMQuaternionIdentity();
+        } else {
+            spacecraftRot = DirectX::XMVector4Normalize(DirectX::XMLoadFloat4(&rot));
+        }
+        
         DirectX::XMVECTOR cameraOffset = DirectX::XMLoadFloat3(&spacecraftComp->cameraOffset);
         
         // 旋转偏移
@@ -277,17 +343,20 @@ void CameraModeSystem::UpdateSpacecraftCamera(entt::registry& registry) {
         
         DirectX::XMStoreFloat3(&camera.position, cameraPos);
         
-        // 直接使用飞船的旋转四元数计算视角方向
-        // 飞船前方向就是相机看向的方向
-        DirectX::XMVECTOR forward = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), spacecraftRot);
-        DirectX::XMVECTOR up = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 1, 0, 0), spacecraftRot);
+        // 飞船模型被绕X轴旋转了-90度，所以：
+        // - 原来的Z轴（前）变成了-Y轴
+        // - 原来的Y轴（上）变成了Z轴
+        // 因此我们需要使用 (0, -1, 0) 作为forward，(0, 0, 1) 作为up
+        // 这样经过飞船旋转后就能得到正确的视角方向
+        DirectX::XMVECTOR forward = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, -1, 0, 0), spacecraftRot);
+        DirectX::XMVECTOR up = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), spacecraftRot);
         
         // 设置相机目标点（前方一定距离）
         DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(cameraPos, forward);
         DirectX::XMStoreFloat3(&camera.target, targetPos);
         DirectX::XMStoreFloat3(&camera.up, up);
         
-        // 同步局部坐标系（用于球面重力系统兼容）
+        // 同步局部坐标系
         DirectX::XMVECTOR right = DirectX::XMVector3Rotate(DirectX::XMVectorSet(1, 0, 0, 0), spacecraftRot);
         DirectX::XMStoreFloat3(&camera.localUp, up);
         DirectX::XMStoreFloat3(&camera.localForward, forward);

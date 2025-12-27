@@ -18,6 +18,7 @@ private:
     void ProcessPlayerInput(float deltaTime, entt::registry& registry);
     void UpdatePlayerMovement(float deltaTime, entt::registry& registry);
     void UpdatePlayerCamera(float deltaTime, entt::registry& registry);
+    void UpdateSpacecraftInteraction(float deltaTime, entt::registry& registry);
 
     entt::entity FindPlayerCamera(entt::entity playerEntity, entt::registry& registry);
     entt::entity FindCameraPlayer(entt::entity cameraEntity, entt::registry& registry);

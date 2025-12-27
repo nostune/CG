@@ -20,25 +20,15 @@ void PhysicsSystem::Initialize(std::shared_ptr<Scene> scene) {
 }
 
 void PhysicsSystem::Update(float deltaTime, entt::registry& registry) {
-    m_TimeAccumulator += deltaTime;
+    // 注意：PhysX simulate/fetchResults 由 Engine::Update 中的 PhysXManager::Update 统一调用
+    // 这里只做变换同步，不做物理模拟
     
-    // Fixed timestep physics update
-    while (m_TimeAccumulator >= m_FixedTimeStep) {
-        // Sync transforms to physics
-        SyncTransformsToPhysics(registry);
-        
-        // Step physics simulation
-        auto* scene = PhysXManager::GetInstance().GetScene();
-        if (scene) {
-            scene->simulate(m_FixedTimeStep);
-            scene->fetchResults(true);
-        }
-        
-        // Sync physics back to transforms
-        SyncPhysicsToTransforms(registry);
-        
-        m_TimeAccumulator -= m_FixedTimeStep;
-    }
+    // Sync transforms to physics (在 PhysX simulate 之前)
+    SyncTransformsToPhysics(registry);
+    
+    // 物理模拟后的同步由 Engine::Update 调用 SectorSystem::PostPhysicsUpdate 完成
+    // 对于不在 Sector 中的实体，这里同步
+    // SyncPhysicsToTransforms(registry);  // 已移至 PostPhysicsUpdate
 }
 
 void PhysicsSystem::Shutdown() {
@@ -92,6 +82,22 @@ void PhysicsSystem::SyncTransformsToPhysics(entt::registry& registry) {
         // 跳过 Sector 实体 - 它们的物理位置由 SectorSystem 特殊管理
         // Sector 的物理体需要保持在原点 (0,0,0)，不能同步到 TransformComponent
         if (registry.all_of<components::SectorComponent>(entity)) {
+            continue;
+        }
+        
+        // 跳过在 Sector 中的实体 - 它们的 PhysX 位置应该使用局部坐标
+        // 而不是 TransformComponent 中的世界坐标
+        if (registry.all_of<components::InSectorComponent>(entity)) {
+            // 对于在 Sector 中的 kinematic 实体，使用局部坐标更新 PhysX
+            if (rigidBody.physxActor && rigidBody.isKinematic) {
+                auto& inSector = registry.get<components::InSectorComponent>(entity);
+                physx::PxTransform pxTransform(
+                    physx::PxVec3(inSector.localPosition.x, inSector.localPosition.y, inSector.localPosition.z),
+                    physx::PxQuat(inSector.localRotation.x, inSector.localRotation.y, 
+                                  inSector.localRotation.z, inSector.localRotation.w)
+                );
+                rigidBody.physxActor->setGlobalPose(pxTransform);
+            }
             continue;
         }
         

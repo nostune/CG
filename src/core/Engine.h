@@ -20,6 +20,10 @@ class SectorSystem;
 class AudioSystem;
 class UISystem;
 
+namespace systems {
+    class SpacecraftControlSystem;
+}
+
 class Engine {
 public:
     static Engine& GetInstance() {
@@ -73,6 +77,7 @@ private:
     std::shared_ptr<SectorSystem> m_SectorSystem;
     std::shared_ptr<AudioSystem> m_AudioSystem;
     std::shared_ptr<UISystem> m_UISystem;
+    std::shared_ptr<systems::SpacecraftControlSystem> m_SpacecraftControlSystem;
 
     // Common resources
     std::shared_ptr<resources::Mesh> m_PlanetMesh;

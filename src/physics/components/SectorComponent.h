@@ -6,6 +6,107 @@
 namespace outer_wilds {
 namespace components {
 
+// ============================================================================
+// Sector 实体类型枚举
+// ============================================================================
+
+/**
+ * SectorEntityType - 定义实体在 Sector 系统中的类型
+ * 
+ * 不同类型有不同的物理行为和坐标处理方式
+ */
+enum class SectorEntityType {
+    /** 玩家 - CharacterController，受重力影响，可切换 Sector */
+    Player,
+    
+    /** 静态物体 - 建筑、地形装饰等，不移动，固定在创建时的 Sector */
+    StaticObject,
+    
+    /** 可模拟物体 - 受物理影响的动态物体（箱子、石头等），可切换 Sector */
+    SimulatedObject,
+    
+    /** 飞船 - 可切换静态/可模拟模式 */
+    Spacecraft,
+    
+    /** 天体 - 星球、月球等，是 Sector 的宿主 */
+    Celestial,
+    
+    /** 其他 - 不参与 Sector 物理的物体 */
+    Other
+};
+
+/**
+ * SectorEntityTypeComponent - 标识实体的 Sector 类型和行为
+ */
+struct SectorEntityTypeComponent {
+    SectorEntityType type = SectorEntityType::Other;
+    
+    /** 是否可以切换 Sector（基于距离） */
+    bool canSwitchSector = false;
+    
+    /** 是否受 Sector 重力影响 */
+    bool affectedBySectorGravity = true;
+    
+    /** 是否需要同步物理到渲染坐标 */
+    bool syncPhysicsToRender = true;
+    
+    // 工厂方法 - 创建预设类型
+    static SectorEntityTypeComponent Player() {
+        return { SectorEntityType::Player, true, true, true };
+    }
+    
+    static SectorEntityTypeComponent StaticObject() {
+        return { SectorEntityType::StaticObject, false, false, false };
+    }
+    
+    static SectorEntityTypeComponent SimulatedObject() {
+        return { SectorEntityType::SimulatedObject, true, true, true };
+    }
+    
+    static SectorEntityTypeComponent Spacecraft() {
+        return { SectorEntityType::Spacecraft, true, true, true };
+    }
+    
+    static SectorEntityTypeComponent Celestial() {
+        return { SectorEntityType::Celestial, false, false, false };
+    }
+};
+
+// ============================================================================
+// 飞船模式组件
+// ============================================================================
+
+/**
+ * SpacecraftModeComponent - 飞船的运行模式
+ */
+struct SpacecraftModeComponent {
+    enum class Mode {
+        Parked,     // 停泊模式 - kinematic，相对于 Sector 静止
+        Flying      // 飞行模式 - dynamic，完全动态模拟
+    };
+    
+    Mode currentMode = Mode::Parked;
+    
+    /** 停泊时所属的 Sector（飞行时可能为 null） */
+    Entity parkedInSector = entt::null;
+    
+    /** 停泊时的局部位置（用于恢复） */
+    DirectX::XMFLOAT3 parkedLocalPosition = {0.0f, 0.0f, 0.0f};
+    
+    /** 停泊时的局部旋转 */
+    DirectX::XMFLOAT4 parkedLocalRotation = {0.0f, 0.0f, 0.0f, 1.0f};
+    
+    /** 是否可以被驾驶 */
+    bool canBePiloted = true;
+    
+    /** 进入飞行模式时是否受重力影响 */
+    bool affectedByGravityWhenFlying = true;
+};
+
+// ============================================================================
+// Sector 宿主组件
+// ============================================================================
+
 /**
  * SectorComponent - 定义一个 Sector（局部坐标系）
  * 

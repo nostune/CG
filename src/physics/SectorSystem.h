@@ -129,13 +129,6 @@ public:
                     static_cast<float>(footPos.z)
                 );
                 hasPhysics = true;
-                
-                if (shouldDebug) {
-                    // 计算与星球中心的距离
-                    float distance = sqrtf(footPos.x * footPos.x + footPos.y * footPos.y + footPos.z * footPos.z);
-                    std::cout << "[SectorSystem] Player local: (" << (float)footPos.x << ", " << (float)footPos.y 
-                              << ", " << (float)footPos.z << "), dist=" << distance << std::endl;
-                }
             }
             
             // 其次检查 RigidBody
@@ -437,6 +430,24 @@ private:
                     physx::PxVec3(inSector.localPosition.x, inSector.localPosition.y, inSector.localPosition.z)
                 );
                 rigidBody->physxActor->setGlobalPose(pose);
+                
+                // 为 RigidBody 实体也输出日志（如 飞船）
+                if (!charController) {
+                    // 获取实体类型
+                    auto* entityType = registry.try_get<SectorEntityTypeComponent>(entity);
+                    const char* typeName = "Object";
+                    if (entityType) {
+                        switch (entityType->type) {
+                            case SectorEntityType::Spacecraft: typeName = "Spacecraft"; break;
+                            case SectorEntityType::SimulatedObject: typeName = "SimulatedObject"; break;
+                            case SectorEntityType::StaticObject: typeName = "StaticObject"; break;
+                            default: typeName = "Object"; break;
+                        }
+                    }
+                    std::cout << "[SectorSystem] " << typeName << " initialized in Sector '" << sector->name 
+                              << "' at local (" << inSector.localPosition.x << ", " 
+                              << inSector.localPosition.y << ", " << inSector.localPosition.z << ")" << std::endl;
+                }
             }
         }
     }

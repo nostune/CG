@@ -70,6 +70,11 @@ private:
     /// 更新飞船相机位置
     /// </summary>
     void UpdateSpacecraftCamera(entt::registry& registry);
+    
+    /// <summary>
+    /// 检测玩家飞船驾驶状态，自动切换相机
+    /// </summary>
+    void CheckSpacecraftPilotingState(entt::registry& registry);
 
     std::shared_ptr<Scene> m_Scene;
     CameraMode m_CurrentMode = CameraMode::Player;

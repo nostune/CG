@@ -270,9 +270,16 @@ int main(int argc, char* argv[]) {
         // 创建星球物理配置
         outer_wilds::PhysicsOptions planetPhysics;
         planetPhysics.addCollider = true;
-        planetPhysics.addRigidBody = true;
-        planetPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
-        planetPhysics.sphereRadius = PLANET_MODEL_RADIUS;  // 6.4米,会自动乘scale变成64米
+        planetPhysics.addRigidBody = true;  // 重新启用地球物理
+        // 【测试】改用 Box 碰撞体，测试是否是 Sphere-Sphere 碰撞 bug
+        planetPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Box;
+        planetPhysics.boxExtent = DirectX::XMFLOAT3(
+            PLANET_ACTUAL_RADIUS * 2.0f / PLANET_SCALE,  // 需要除以 scale，因为后面会乘
+            PLANET_ACTUAL_RADIUS * 2.0f / PLANET_SCALE,
+            PLANET_ACTUAL_RADIUS * 2.0f / PLANET_SCALE
+        );  // 128m 边长的立方体
+        // planetPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
+        // planetPhysics.sphereRadius = PLANET_MODEL_RADIUS;  // 6.4米,会自动乘scale变成64米
         planetPhysics.mass = 0.0f;                         // 静态物体
         planetPhysics.useGravity = false;                  // 星球本身不受重力
         planetPhysics.isKinematic = true;
@@ -332,6 +339,10 @@ int main(int argc, char* argv[]) {
             earthSector.influenceRadius = 200.0f;  // 200米影响范围
             earthSector.priority = 10;  // 高优先级
             earthSector.isActive = true;  // 初始为活跃 Sector
+            
+            // 添加天体类型组件
+            scene->GetRegistry().emplace<outer_wilds::components::SectorEntityTypeComponent>(
+                planetEntity, outer_wilds::components::SectorEntityTypeComponent::Celestial());
             
             // 将地球放在轨道初始位置（角度0 = X轴正方向）
             auto& planetTransform = scene->GetRegistry().get<outer_wilds::TransformComponent>(planetEntity);
@@ -488,22 +499,28 @@ int main(int argc, char* argv[]) {
         // 2. 更新 CharacterController 到局部坐标
         playerInSector.isInitialized = false;
         
+        // 添加玩家类型组件
+        scene->GetRegistry().emplace<outer_wilds::components::SectorEntityTypeComponent>(
+            playerEntity, outer_wilds::components::SectorEntityTypeComponent::Player());
+        
         // 添加飞船交互组件
         scene->GetRegistry().emplace<outer_wilds::components::PlayerSpacecraftInteractionComponent>(playerEntity);
         
         // 自由相机将由CameraModeSystem动态创建（不在玩家实体上）
         outer_wilds::DebugManager::GetInstance().Log("Main", "Player created (Press Shift+ESC to toggle free camera)");
-        
+       
         // ========================================
-        // 创建飞船（使用 FBX 模型）
+        // 创建飞船（使用 FBX 模型）- 使用 Sector 坐标系统
         // ========================================
         {
             // 飞船位置：在玩家附近，行星表面上方
-            // 使用球坐标计算，放在地球表面上方，与玩家相邻
-            const float SPACECRAFT_SURFACE_OFFSET = 1.5f;  // 比地表高1.5米（贴近地面）
+            // 注意：飞船绕X轴旋转-90度后，碰撞盒的Z轴变成了垂直方向
+            // 碰撞盒是 PxBoxGeometry(3.0, 1.5, 4.0)，旋转后垂直方向半高是4m
+            // 所以飞船中心需要在地面上方至少 4m + 安全余量
+            const float SPACECRAFT_SURFACE_OFFSET = 20.0f;  // 【测试】放高一些看看是否与碰撞有关
             
-            // 飞船位置计算：从地球中心沿Y+方向（和玩家相同）但在X方向偏移一些
-            // 使用向量计算确保在球面上
+            // 飞船位置计算：使用局部坐标（相对于 Sector/地球）
+            // 与玩家相似的方向但在X方向偏移一些
             DirectX::XMFLOAT3 spacecraftDirection = { 0.3f, 1.0f, 0.0f };  // 略偏向X
             float dirLength = sqrtf(spacecraftDirection.x * spacecraftDirection.x + 
                                     spacecraftDirection.y * spacecraftDirection.y + 
@@ -513,27 +530,38 @@ int main(int argc, char* argv[]) {
             spacecraftDirection.z /= dirLength;
             
             float spacecraftHeight = PLANET_ACTUAL_RADIUS + SPACECRAFT_SURFACE_OFFSET;
-            DirectX::XMFLOAT3 spacecraftPosition = {
-                planetTransform.position.x + spacecraftDirection.x * spacecraftHeight,
-                planetTransform.position.y + spacecraftDirection.y * spacecraftHeight,
-                planetTransform.position.z + spacecraftDirection.z * spacecraftHeight
+            
+            // 局部坐标（相对于 Sector 原点，即地球中心）
+            DirectX::XMFLOAT3 spacecraftLocalPosition = {
+                spacecraftDirection.x * spacecraftHeight,
+                spacecraftDirection.y * spacecraftHeight,
+                spacecraftDirection.z * spacecraftHeight
             };
             
-            std::cout << "[Main] Creating Spacecraft at (" 
-                     << spacecraftPosition.x << ", " << spacecraftPosition.y << ", " << spacecraftPosition.z
+            // 世界坐标（用于渲染）= Sector位置 + 局部坐标
+            DirectX::XMFLOAT3 spacecraftWorldPosition = {
+                planetTransform.position.x + spacecraftLocalPosition.x,
+                planetTransform.position.y + spacecraftLocalPosition.y,
+                planetTransform.position.z + spacecraftLocalPosition.z
+            };
+            
+            std::cout << "[Main] Creating Spacecraft - Local: (" 
+                     << spacecraftLocalPosition.x << ", " << spacecraftLocalPosition.y << ", " << spacecraftLocalPosition.z
+                     << "), World: (" << spacecraftWorldPosition.x << ", " << spacecraftWorldPosition.y << ", " << spacecraftWorldPosition.z
                      << ")" << std::endl;
             
             // 飞船缩放（FBX模型较大，需要缩小）
             const float SPACECRAFT_SCALE = 0.02f;  // 缩小到2%
             
             // 使用 SceneAssetLoader 加载飞船模型（带多纹理）
+            // 注意：使用世界坐标加载模型，之后会添加 InSectorComponent
             entt::entity spacecraftEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
                 scene->GetRegistry(),
                 scene,
                 engine.GetRenderSystem()->GetBackend()->GetDevice(),
                 "assets/models/spacecraft/base.fbx",
                 "",  // 不指定纹理，FBX 内嵌或自动查找
-                spacecraftPosition,
+                spacecraftWorldPosition,  // 使用世界坐标（渲染用）
                 DirectX::XMFLOAT3(SPACECRAFT_SCALE, SPACECRAFT_SCALE, SPACECRAFT_SCALE),
                 nullptr  // 物理稍后手动添加
             );
@@ -549,60 +577,118 @@ int main(int argc, char* argv[]) {
                     sinf(angle * 0.5f), 0.0f, 0.0f, cosf(angle * 0.5f)
                 );
                 
-                // 添加飞船组件
+                // 添加飞船组件 - 使用新的纯物理模拟字段
                 auto& spacecraft = scene->GetRegistry().emplace<outer_wilds::components::SpacecraftComponent>(spacecraftEntity);
-                spacecraft.thrustPower = 10.0f;  // 水平推力（降低）
-                spacecraft.verticalThrustPower = 15.0f;  // 垂直推力（刚好能克服重力）
-                spacecraft.angularAcceleration = 2.0f;  // 降低角加速度
-                spacecraft.maxAngularSpeed = 1.5f;  // 降低最大角速度
-                spacecraft.angularDamping = 2.5f;
-                spacecraft.mouseSensitivity = 0.15f;
+                spacecraft.mainThrust = 15000.0f;       // 主推力 15000N
+                spacecraft.strafeThrust = 10000.0f;     // 侧向推力 10000N
+                spacecraft.verticalThrust = 12000.0f;   // 垂直推力 12000N
+                spacecraft.rollTorque = 8000.0f;        // 滚转力矩 8000N·m
+                spacecraft.linearDamping = 0.3f;        // 线性阻尼
+                spacecraft.angularDamping = 2.0f;       // 角阻尼
+                spacecraft.mass = 500.0f;               // 质量 500kg
                 spacecraft.interactionDistance = 10.0f;  // 10米交互距离
-                spacecraft.exitOffset = { 3.0f, 0.0f, 0.0f };
-                spacecraft.cameraOffset = { 0.0f, 2.0f, 0.0f };  // 座舱位置
-                spacecraft.landingAssistAltitude = 15.0f;  // 15米高度阈值（适合小星球）
+                spacecraft.exitOffset = { 5.0f, 0.0f, 0.0f };
+                // 相机偏移：飞船已绕X轴旋转-90度，所以：
+                // - 原来的Y轴（上）变成了Z轴（前）
+                // - 原来的Z轴（前）变成了-Y轴（下）
+                // 所以相机应该在飞船Z轴上方（前方）
+                spacecraft.cameraOffset = { 0.0f, 1.0f, 3.0f };  // 座舱位置：稍微向上+向前
                 
                 // 添加重力影响组件
                 auto& spacecraftGravity = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(spacecraftEntity);
                 spacecraftGravity.affectedByGravity = true;
                 spacecraftGravity.gravityScale = 1.0f;
                 
-                // 添加重力对齐组件（飞船使用 ASSIST_ALIGN 模式）
-                auto& spacecraftAlignment = scene->GetRegistry().emplace<outer_wilds::components::GravityAlignmentComponent>(spacecraftEntity);
-                spacecraftAlignment.mode = outer_wilds::components::GravityAlignmentComponent::AlignmentMode::ASSIST_ALIGN;
-                spacecraftAlignment.alignmentSpeed = 2.0f;
+                // 注意：不再使用 GravityAlignmentComponent
+                // 飞船通过纯物理模拟控制，玩家需要手动调整姿态
                 
-                // 创建 PhysX 刚体
+                // 创建 PhysX 刚体 - 使用局部坐标（相对于 Sector）
                 auto* pxPhysics = outer_wilds::PhysXManager::GetInstance().GetPhysics();
                 auto* pxScene = outer_wilds::PhysXManager::GetInstance().GetScene();
                 
-                const float SPACECRAFT_MASS = 300.0f;  // 增加质量
-                const float SPACECRAFT_LINEAR_DRAG = 0.3f;  // 增加阻力
+                const float SPACECRAFT_MASS = 300.0f;  // 飞船质量 (kg)
+                const float SPACECRAFT_LINEAR_DRAG = 0.3f;  // 线性阻力
                 const float SPACECRAFT_ANGULAR_DRAG = 1.5f;
                 
                 physx::PxMaterial* spacecraftMaterial = pxPhysics->createMaterial(0.5f, 0.5f, 0.1f);
                 
-                // 使用盒子碰撞器，尺寸根据飞船模型调整
-                physx::PxShape* spacecraftShape = pxPhysics->createShape(
-                    physx::PxBoxGeometry(3.0f, 1.5f, 4.0f),  // 6m x 3m x 8m 的盒子
-                    *spacecraftMaterial
-                );
-                
+                // 使用局部坐标创建 PhysX 碰撞体，包含正确的旋转
+                // 先获取 Transform 的旋转
+                const auto& spacecraftRot = spacecraftTransform.rotation;
                 physx::PxTransform spacecraftPose(
-                    physx::PxVec3(spacecraftPosition.x, spacecraftPosition.y, spacecraftPosition.z)
+                    physx::PxVec3(spacecraftLocalPosition.x, spacecraftLocalPosition.y, spacecraftLocalPosition.z),
+                    physx::PxQuat(spacecraftRot.x, spacecraftRot.y, spacecraftRot.z, spacecraftRot.w)
                 );
                 
                 physx::PxRigidDynamic* spacecraftActor = pxPhysics->createRigidDynamic(spacecraftPose);
-                spacecraftActor->attachShape(*spacecraftShape);
-                physx::PxRigidBodyExt::updateMassAndInertia(*spacecraftActor, SPACECRAFT_MASS);
+                
+                // 【测试】使用 createExclusiveShape 创建形状（PhysX 5 推荐方式）
+                physx::PxShape* spacecraftShape = physx::PxRigidActorExt::createExclusiveShape(
+                    *spacecraftActor,
+                    physx::PxSphereGeometry(3.0f),
+                    *spacecraftMaterial
+                );
+                spacecraftShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
+                spacecraftShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+                
+                // 【重要】设置接触偏移，帮助 PhysX 提前检测碰撞
+                spacecraftShape->setContactOffset(0.1f);  // 接触偏移 0.1 米
+                spacecraftShape->setRestOffset(0.02f);    // 休眠偏移 0.02 米
+                
+                // 【测试】暂时禁用飞船的碰撞，只测试简单球体
+                spacecraftShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, false);
+                
+                // 添加到场景
+                pxScene->addActor(*spacecraftActor);
+                
+                // ========================================
+                // 【测试】创建一个最简单的测试球体（行星是 Box）
+                // ========================================
+                std::cout << "[TEST] Creating simple test SPHERE (planet is BOX)..." << std::endl;
+                physx::PxMaterial* testMaterial = pxPhysics->createMaterial(0.5f, 0.5f, 0.3f);
+                physx::PxTransform testPose(physx::PxVec3(0.0f, 80.0f, 10.0f));  // 行星上方80米
+                physx::PxRigidDynamic* testSphere = pxPhysics->createRigidDynamic(testPose);
+                
+                // 使用球体碰撞体
+                physx::PxShape* testShape = physx::PxRigidActorExt::createExclusiveShape(
+                    *testSphere,
+                    physx::PxSphereGeometry(1.0f),  // 1米半径的球
+                    *testMaterial
+                );
+                testShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
+                testShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+                
+                // 设置质量
+                physx::PxRigidBodyExt::updateMassAndInertia(*testSphere, 10.0f);  // 密度=10, 质量约42kg
+                testSphere->setLinearDamping(0.1f);
+                testSphere->setAngularDamping(0.1f);
+                
+                // 添加到场景
+                pxScene->addActor(*testSphere);
+                testSphere->wakeUp();
+                
+                std::cout << "[TEST] Test sphere created at (0, 80, 10) with radius=1m, mass=" 
+                          << testSphere->getMass() << "kg" << std::endl;
+                std::cout << "[TEST] Planet collision radius = 64m, test sphere should collide at dist=65m" << std::endl;
+                
+                // 【测试】增加求解器迭代次数，提高碰撞稳定性
+                spacecraftActor->setSolverIterationCounts(8, 4);  // 8 位置迭代, 4 速度迭代
+                
+                // 【测试】暂时禁用 CCD 看是否 CCD 导致崩溃
+                // spacecraftActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
+                
+                // 使用密度1来计算惯性张量，然后手动设置质量
+                physx::PxRigidBodyExt::updateMassAndInertia(*spacecraftActor, 1.0f);  // 密度=1
+                spacecraftActor->setMass(SPACECRAFT_MASS);  // 手动设置质量
+                
                 spacecraftActor->setLinearDamping(SPACECRAFT_LINEAR_DRAG);
                 spacecraftActor->setAngularDamping(SPACECRAFT_ANGULAR_DRAG);
                 
-                // 设置为 Kinematic 模式（与 staticAttach = true 对应）
-                // 这样在玩家输入起飞命令前，飞船会保持静止附着在地面
-                spacecraftActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, true);
+                // 设置最大速度限制，防止速度过快导致穿透
+                spacecraftActor->setMaxLinearVelocity(100.0f);  // 最大100 m/s
+                spacecraftActor->setMaxAngularVelocity(10.0f);  // 最大10 rad/s
                 
-                pxScene->addActor(*spacecraftActor);
+                spacecraftActor->wakeUp();  // 确保飞船处于活跃状态
                 
                 // 添加刚体组件
                 auto& spacecraftRigidBody = scene->GetRegistry().emplace<outer_wilds::RigidBodyComponent>(spacecraftEntity);
@@ -610,11 +696,27 @@ int main(int argc, char* argv[]) {
                 spacecraftRigidBody.mass = SPACECRAFT_MASS;
                 spacecraftRigidBody.drag = SPACECRAFT_LINEAR_DRAG;
                 spacecraftRigidBody.angularDrag = SPACECRAFT_ANGULAR_DRAG;
-                spacecraftRigidBody.useGravity = false;
-                spacecraftRigidBody.isKinematic = true;  // 与 PhysX actor 的 kinematic 标志同步
+                spacecraftRigidBody.useGravity = true;  // 【测试】启用重力
+                spacecraftRigidBody.isKinematic = false;  // 【测试】Dynamic模式
                 
-                std::cout << "[Main] Spacecraft created! Press E near it to enter." << std::endl;
-                std::cout << "[Main] Spacecraft controls: WASD=move, Mouse=look, Shift/Ctrl=up/down, L=landing assist" << std::endl;
+                // 添加 Sector 组件，使飞船成为地球 Sector 的一部分
+                auto& spacecraftInSector = scene->GetRegistry().emplace<outer_wilds::components::InSectorComponent>(spacecraftEntity);
+                spacecraftInSector.currentSector = planetEntity;
+                spacecraftInSector.localPosition = spacecraftLocalPosition;
+                // 初始旋转：让飞船底部朝向地球中心（Y轴向上对齐重力方向）
+                spacecraftInSector.localRotation = scene->GetRegistry().get<outer_wilds::TransformComponent>(spacecraftEntity).rotation;
+                spacecraftInSector.isInitialized = true;
+                
+                // 添加 Sector 实体类型组件（飞船类型）
+                scene->GetRegistry().emplace<outer_wilds::components::SectorEntityTypeComponent>(
+                    spacecraftEntity, 
+                    outer_wilds::components::SectorEntityTypeComponent::Spacecraft()
+                );
+                
+                std::cout << "[Main] Spacecraft created in Sector 'Earth'! Press F near it to enter." << std::endl;
+                std::cout << "[Main] Spacecraft Local Position: (" << spacecraftLocalPosition.x << ", " 
+                         << spacecraftLocalPosition.y << ", " << spacecraftLocalPosition.z << ")" << std::endl;
+                std::cout << "[Main] Spacecraft controls: WASD=move, Shift/Ctrl=up/down, Q/E=roll" << std::endl;
             } else {
                 std::cout << "[Main] ERROR: Failed to load spacecraft model!" << std::endl;
             }
@@ -635,10 +737,10 @@ int main(int argc, char* argv[]) {
                 << "m, moon_radius=" << MOON_RADIUS << "m, scale=" << MOON_SCALE;
         outer_wilds::DebugManager::GetInstance().Log("Main", moonLog.str());
         
-        // 创建月球物理配置
+        // 创建月球物理配置 - 【测试】暂时禁用碰撞
         outer_wilds::PhysicsOptions moonPhysics;
-        moonPhysics.addCollider = true;
-        moonPhysics.addRigidBody = true;
+        moonPhysics.addCollider = false;  // 禁用碰撞测试
+        moonPhysics.addRigidBody = false; // 禁用刚体测试
         moonPhysics.shape = outer_wilds::PhysicsOptions::ColliderShape::Sphere;
         moonPhysics.sphereRadius = PLANET_MODEL_RADIUS;
         moonPhysics.mass = 0.0f;

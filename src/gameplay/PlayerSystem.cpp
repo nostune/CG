@@ -7,6 +7,8 @@
 #include "../graphics/components/CameraComponent.h"
 #include "../graphics/components/FreeCameraComponent.h"
 #include "../physics/components/GravityAffectedComponent.h"
+#include "../physics/components/SectorComponent.h"
+#include "../physics/components/RigidBodyComponent.h"
 #include "../input/InputManager.h"
 #include "../physics/PhysXManager.h"
 #include "../core/DebugManager.h"
@@ -29,6 +31,7 @@ void PlayerSystem::Initialize(std::shared_ptr<Scene> scene) {
 
 void PlayerSystem::Update(float deltaTime, entt::registry& registry) {
     ProcessPlayerInput(deltaTime, registry);
+    UpdateSpacecraftInteraction(deltaTime, registry);
     UpdatePlayerMovement(deltaTime, registry);
     UpdatePlayerCamera(deltaTime, registry);
 }
@@ -306,6 +309,195 @@ entt::entity PlayerSystem::FindCameraPlayer(entt::entity cameraEntity, entt::reg
         return *playerView.begin();
     }
     return entt::null;
+}
+
+void PlayerSystem::UpdateSpacecraftInteraction(float deltaTime, entt::registry& registry) {
+    using namespace DirectX;
+    
+    // 按键状态（共用一个静态变量避免重复触发）
+    static bool fKeyWasPressed = false;
+    static float fKeyCooldown = 0.0f;  // 按键冷却时间
+    const float KEY_COOLDOWN_TIME = 0.5f;  // 0.5秒冷却
+    
+    bool fKeyPressed = (GetAsyncKeyState('F') & 0x8000) != 0;
+    
+    // 更新冷却时间
+    if (fKeyCooldown > 0.0f) {
+        fKeyCooldown -= deltaTime;
+    }
+    
+    // 查找玩家
+    auto playerView = registry.view<PlayerComponent, TransformComponent, PlayerSpacecraftInteractionComponent>();
+    
+    for (auto playerEntity : playerView) {
+        auto& playerTransform = playerView.get<TransformComponent>(playerEntity);
+        auto& interaction = playerView.get<PlayerSpacecraftInteractionComponent>(playerEntity);
+        
+        // 如果正在驾驶，检查退出飞船
+        if (interaction.isPiloting) {
+            interaction.showInteractionPrompt = false;
+            
+            // 处理退出飞船（F键）- 需要冷却时间已过
+            if (fKeyPressed && !fKeyWasPressed && fKeyCooldown <= 0.0f && interaction.currentSpacecraft != entt::null) {
+                std::cout << "[PlayerSystem] F pressed - Exiting spacecraft!" << std::endl;
+                
+                auto& spacecraft = registry.get<SpacecraftComponent>(interaction.currentSpacecraft);
+                auto& spacecraftTransform = registry.get<TransformComponent>(interaction.currentSpacecraft);
+                
+                // 重置飞船状态
+                spacecraft.currentState = SpacecraftComponent::State::IDLE;
+                spacecraft.pilot = entt::null;
+                
+                // 将飞船切换回 Kinematic 模式（保持当前位置）
+                if (registry.all_of<RigidBodyComponent>(interaction.currentSpacecraft)) {
+                    auto& rb = registry.get<RigidBodyComponent>(interaction.currentSpacecraft);
+                    if (rb.physxActor) {
+                        auto* dynamicActor = rb.physxActor->is<physx::PxRigidDynamic>();
+                        if (dynamicActor) {
+                            // 先清除速度
+                            dynamicActor->setLinearVelocity(physx::PxVec3(0, 0, 0));
+                            dynamicActor->setAngularVelocity(physx::PxVec3(0, 0, 0));
+                            // 切换到 Kinematic
+                            dynamicActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, true);
+                            rb.isKinematic = true;
+                            std::cout << "[PlayerSystem] Spacecraft switched to Kinematic mode" << std::endl;
+                        }
+                    }
+                }
+                
+                // 将玩家放到飞船旁边
+                if (registry.all_of<components::CharacterControllerComponent>(playerEntity)) {
+                    auto& cc = registry.get<components::CharacterControllerComponent>(playerEntity);
+                    if (cc.controller) {
+                        // 计算飞船的"上"方向（从地球中心指向飞船）
+                        XMVECTOR spacecraftPos = XMLoadFloat3(&spacecraftTransform.position);
+                        XMVECTOR upDir = XMVector3Normalize(spacecraftPos);
+                        
+                        // 在飞船旁边偏移一点（沿"上"方向偏移2米）
+                        XMVECTOR exitPos = XMVectorAdd(spacecraftPos, XMVectorScale(upDir, 2.0f));
+                        XMFLOAT3 exitPosF;
+                        XMStoreFloat3(&exitPosF, exitPos);
+                        
+                        cc.controller->setPosition(physx::PxExtendedVec3(exitPosF.x, exitPosF.y, exitPosF.z));
+                        std::cout << "[PlayerSystem] Player moved to exit position: (" 
+                                  << exitPosF.x << ", " << exitPosF.y << ", " << exitPosF.z << ")" << std::endl;
+                    }
+                }
+                
+                // 重置玩家交互状态
+                interaction.isPiloting = false;
+                interaction.currentSpacecraft = entt::null;
+                
+                // 设置冷却时间
+                fKeyCooldown = KEY_COOLDOWN_TIME;
+            }
+            
+            fKeyWasPressed = fKeyPressed;
+            continue;
+        }
+        
+        // 获取玩家位置（优先使用局部坐标）
+        auto* playerInSector = registry.try_get<InSectorComponent>(playerEntity);
+        XMFLOAT3 playerPos = playerInSector ? playerInSector->localPosition : playerTransform.position;
+        XMVECTOR playerPosVec = XMLoadFloat3(&playerPos);
+        
+        // 重置交互状态
+        interaction.nearestSpacecraft = entt::null;
+        interaction.distanceToNearest = FLT_MAX;
+        interaction.showInteractionPrompt = false;
+        
+        // 查找最近的飞船
+        auto spacecraftView = registry.view<SpacecraftComponent, TransformComponent>();
+        
+        for (auto scEntity : spacecraftView) {
+            auto& spacecraft = spacecraftView.get<SpacecraftComponent>(scEntity);
+            auto& scTransform = spacecraftView.get<TransformComponent>(scEntity);
+            
+            // 飞船必须是 IDLE 状态才能被登上
+            if (spacecraft.currentState != SpacecraftComponent::State::IDLE) {
+                continue;
+            }
+            
+            // 计算距离
+            float distance = FLT_MAX;
+            auto* scInSector = registry.try_get<InSectorComponent>(scEntity);
+            
+            // 如果玩家和飞船在同一个 Sector，使用局部坐标
+            if (playerInSector && scInSector && 
+                playerInSector->currentSector == scInSector->currentSector) {
+                XMVECTOR scPosVec = XMLoadFloat3(&scInSector->localPosition);
+                distance = XMVectorGetX(XMVector3Length(XMVectorSubtract(scPosVec, playerPosVec)));
+            } else {
+                // 不在同一个 Sector，使用世界坐标
+                XMVECTOR scWorldPos = XMLoadFloat3(&scTransform.position);
+                XMVECTOR playerWorldPos = XMLoadFloat3(&playerTransform.position);
+                distance = XMVectorGetX(XMVector3Length(XMVectorSubtract(scWorldPos, playerWorldPos)));
+            }
+            
+            if (distance < interaction.distanceToNearest) {
+                interaction.distanceToNearest = distance;
+                interaction.nearestSpacecraft = scEntity;
+            }
+        }
+        
+        // 检查是否在交互范围内
+        if (interaction.nearestSpacecraft != entt::null) {
+            auto& nearestSC = registry.get<SpacecraftComponent>(interaction.nearestSpacecraft);
+            if (interaction.distanceToNearest < nearestSC.interactionDistance) {
+                interaction.showInteractionPrompt = true;
+                
+                // 调试输出（每5秒一次）
+                static int debugFrame = 0;
+                if (++debugFrame % 300 == 0) {
+                    std::cout << "[PlayerSystem] Near spacecraft! Distance: " << interaction.distanceToNearest 
+                              << "m (range: " << nearestSC.interactionDistance << "m)" << std::endl;
+                }
+            }
+        }
+        
+        // 处理交互按键（F键）- 需要冷却时间已过
+        if (fKeyPressed && !fKeyWasPressed && fKeyCooldown <= 0.0f) {
+            if (interaction.showInteractionPrompt && interaction.nearestSpacecraft != entt::null) {
+                std::cout << "[PlayerSystem] F pressed - Entering spacecraft!" << std::endl;
+                interaction.isPiloting = true;
+                interaction.currentSpacecraft = interaction.nearestSpacecraft;
+                
+                auto& spacecraft = registry.get<SpacecraftComponent>(interaction.nearestSpacecraft);
+                spacecraft.pilot = playerEntity;
+                spacecraft.currentState = SpacecraftComponent::State::PILOTED;
+                
+                // 飞船保持 Kinematic 模式（因为我们禁用了物理碰撞 SIMULATION_SHAPE）
+                // 飞船控制将通过直接修改位置/旋转来实现
+                if (registry.all_of<RigidBodyComponent>(interaction.nearestSpacecraft)) {
+                    auto& rb = registry.get<RigidBodyComponent>(interaction.nearestSpacecraft);
+                    if (rb.physxActor) {
+                        auto* dynamicActor = rb.physxActor->is<physx::PxRigidDynamic>();
+                        if (dynamicActor) {
+                            // 保持 Kinematic 模式，避免重力影响
+                            dynamicActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, true);
+                            rb.isKinematic = true;
+                            
+                            std::cout << "[PlayerSystem] Spacecraft ready for piloting (Kinematic mode)!" << std::endl;
+                        }
+                    }
+                }
+                
+                // 隐藏玩家 - 将玩家移到远离飞船的位置避免碰撞
+                if (registry.all_of<components::CharacterControllerComponent>(playerEntity)) {
+                    auto& cc = registry.get<components::CharacterControllerComponent>(playerEntity);
+                    if (cc.controller) {
+                        // 将玩家的 CharacterController 移到远处（不会被渲染，因为相机在飞船上）
+                        cc.controller->setPosition(physx::PxExtendedVec3(0, -1000, 0));
+                    }
+                }
+                
+                // 设置冷却时间
+                fKeyCooldown = KEY_COOLDOWN_TIME;
+            }
+        }
+        
+        fKeyWasPressed = fKeyPressed;
+    }
 }
 
 } // namespace outer_wilds

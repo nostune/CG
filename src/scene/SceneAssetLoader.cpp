@@ -9,6 +9,7 @@
 #include "../graphics/resources/TextureLoader.h"
 #include "../physics/components/ColliderComponent.h"
 #include "../physics/components/RigidBodyComponent.h"
+#include "../physics/components/SectorComponent.h"
 #include "../physics/PhysXManager.h"
 #include "../core/DebugManager.h"
 #include <fstream>
@@ -196,7 +197,12 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
             // 确保 Shape 支持场景查询（CharacterController 需要这个）
             // 设置 Shape 的 flags 以确保可以被查询检测到
             pxShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
+            // 启用物理模拟碰撞
             pxShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+            
+            // 【重要】设置接触偏移，帮助 PhysX 提前检测碰撞
+            pxShape->setContactOffset(0.1f);  // 接触偏移 0.1 米
+            pxShape->setRestOffset(0.02f);    // 休眠偏移 0.02 米
             
             // 设置查询过滤数据（允许所有类型的查询）
             physx::PxFilterData queryFilterData;
@@ -266,6 +272,135 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
         std::to_string(position.y) + ", " + 
         std::to_string(position.z) + ")");
 
+    return entity;
+}
+
+entt::entity SceneAssetLoader::LoadStaticObjectInSector(
+    entt::registry& registry,
+    std::shared_ptr<Scene> scene,
+    ID3D11Device* device,
+    entt::entity sectorEntity,
+    const std::string& objPath,
+    const std::string& texturePath,
+    const DirectX::XMFLOAT3& localPosition,
+    const DirectX::XMFLOAT3& scale,
+    const PhysicsOptions* physicsOpts
+) {
+    // 验证 Sector 实体
+    if (sectorEntity == entt::null || !registry.valid(sectorEntity)) {
+        DebugManager::GetInstance().Log("SceneAssetLoader", "Invalid sector entity");
+        return entt::null;
+    }
+    
+    auto* sectorComp = registry.try_get<components::SectorComponent>(sectorEntity);
+    if (!sectorComp) {
+        DebugManager::GetInstance().Log("SceneAssetLoader", "Entity is not a valid Sector");
+        return entt::null;
+    }
+    
+    // 计算世界坐标（用于渲染）
+    DirectX::XMFLOAT3 worldPosition = {
+        sectorComp->worldPosition.x + localPosition.x,
+        sectorComp->worldPosition.y + localPosition.y,
+        sectorComp->worldPosition.z + localPosition.z
+    };
+    
+    // 加载模型（不使用 physics，我们会手动创建局部坐标的物理体）
+    entt::entity entity = LoadModelAsEntity(
+        registry, scene, device, objPath, texturePath,
+        worldPosition, scale, nullptr  // 暂时不添加物理
+    );
+    
+    if (entity == entt::null) {
+        return entt::null;
+    }
+    
+    // 添加 Sector 相关组件
+    auto& inSector = registry.emplace<components::InSectorComponent>(entity);
+    inSector.currentSector = sectorEntity;
+    inSector.localPosition = localPosition;
+    inSector.isInitialized = true;  // 静态物体直接初始化
+    
+    // 添加实体类型组件
+    registry.emplace<components::SectorEntityTypeComponent>(
+        entity, components::SectorEntityTypeComponent::StaticObject());
+    
+    // 如果需要物理碰撞体，在局部坐标系中创建
+    if (physicsOpts && physicsOpts->addCollider) {
+        physx::PxPhysics* physics = PhysXManager::GetInstance().GetPhysics();
+        physx::PxScene* pxScene = PhysXManager::GetInstance().GetScene();
+        
+        if (physics && pxScene) {
+            // 创建材质
+            physx::PxMaterial* pxMaterial = physics->createMaterial(
+                physicsOpts->staticFriction,
+                physicsOpts->dynamicFriction,
+                physicsOpts->restitution
+            );
+            
+            // 创建形状
+            physx::PxShape* pxShape = nullptr;
+            if (physicsOpts->shape == PhysicsOptions::ColliderShape::Sphere) {
+                float maxScale = (std::max)({scale.x, scale.y, scale.z});
+                float radius = physicsOpts->sphereRadius * maxScale;
+                pxShape = physics->createShape(physx::PxSphereGeometry(radius), *pxMaterial);
+            } else if (physicsOpts->shape == PhysicsOptions::ColliderShape::Box) {
+                physx::PxVec3 halfExtents(
+                    physicsOpts->boxExtent.x * scale.x * 0.5f,
+                    physicsOpts->boxExtent.y * scale.y * 0.5f,
+                    physicsOpts->boxExtent.z * scale.z * 0.5f
+                );
+                pxShape = physics->createShape(physx::PxBoxGeometry(halfExtents), *pxMaterial);
+            }
+            
+            if (pxShape) {
+                // 设置 Shape flags
+                pxShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
+                pxShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+                
+                // 设置过滤数据
+                physx::PxFilterData filterData;
+                filterData.word0 = 0xFFFFFFFF;
+                filterData.word1 = 0xFFFFFFFF;
+                pxShape->setQueryFilterData(filterData);
+                pxShape->setSimulationFilterData(filterData);
+                
+                // 在局部坐标系中创建 RigidStatic
+                physx::PxTransform pxTransform(
+                    physx::PxVec3(localPosition.x, localPosition.y, localPosition.z),
+                    physx::PxQuat(0, 0, 0, 1)
+                );
+                
+                physx::PxRigidStatic* pxActor = physics->createRigidStatic(pxTransform);
+                pxActor->attachShape(*pxShape);
+                pxScene->addActor(*pxActor);
+                
+                // 添加组件
+                auto& collider = registry.emplace<ColliderComponent>(entity);
+                if (physicsOpts->shape == PhysicsOptions::ColliderShape::Sphere) {
+                    collider.type = ColliderType::Sphere;
+                    collider.sphereRadius = physicsOpts->sphereRadius;
+                } else {
+                    collider.type = ColliderType::Box;
+                    collider.boxExtent = physicsOpts->boxExtent;
+                }
+                
+                auto& rigidBody = registry.emplace<RigidBodyComponent>(entity);
+                rigidBody.mass = 0.0f;
+                rigidBody.useGravity = false;
+                rigidBody.isKinematic = true;
+                rigidBody.physxActor = pxActor;
+                
+                pxShape->release();
+                
+                DebugManager::GetInstance().Log("SceneAssetLoader", 
+                    "Created static object in Sector '" + sectorComp->name + 
+                    "' at local (" + std::to_string(localPosition.x) + ", " + 
+                    std::to_string(localPosition.y) + ", " + std::to_string(localPosition.z) + ")");
+            }
+        }
+    }
+    
     return entity;
 }
 

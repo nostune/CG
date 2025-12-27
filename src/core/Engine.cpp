@@ -9,6 +9,8 @@
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/PlayerAlignmentSystem.h"
 #include "../gameplay/OrbitSystem.h"
+#include "../gameplay/SpacecraftControlSystem.h"
+#include "../gameplay/components/SpacecraftComponent.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
 #include "../audio/AudioSystem.h"
@@ -69,6 +71,9 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 飞船控制系统（纯物理模拟）
+    m_SpacecraftControlSystem = AddSystem<systems::SpacecraftControlSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
@@ -137,6 +142,13 @@ void Engine::MainLoop() {
 }
 
 void Engine::Update() {
+    static int frameNum = 0;
+    frameNum++;
+    
+    if (frameNum <= 3) {
+        std::cout << "[Engine::Update] Frame " << frameNum << " start" << std::endl;
+    }
+    
     if (!m_SceneManager || !m_SceneManager->GetActiveScene()) return;
     auto& registry = m_SceneManager->GetActiveScene()->GetRegistry();
 
@@ -150,14 +162,25 @@ void Engine::Update() {
     // 7. RenderSystem: 渲染（最后执行！）
 
     // 执行所有系统的Update（跳过RenderSystem，最后单独调用）
+    int sysIdx = 0;
     for (auto& system : m_Systems) {
         // 跳过 RenderSystem，它需要在最后执行
         if (system.get() == static_cast<System*>(m_RenderSystem.get())) {
             continue;
         }
+        if (frameNum <= 3) {
+            std::cout << "[Engine::Update] Frame " << frameNum << " system " << sysIdx << " start" << std::endl;
+        }
         system->Update(m_DeltaTime, registry);
+        if (frameNum <= 3) {
+            std::cout << "[Engine::Update] Frame " << frameNum << " system " << sysIdx << " done" << std::endl;
+        }
+        sysIdx++;
     }
-
+    
+    if (frameNum <= 300) {
+        std::cout << "[Engine::Update] Frame " << frameNum << " PhysX start" << std::endl;
+    }
     // PhysX物理模拟
     PhysXManager::GetInstance().Update(m_DeltaTime);
 
