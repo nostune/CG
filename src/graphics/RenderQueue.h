@@ -34,6 +34,7 @@ struct RenderBatch {
     ID3D11ShaderResourceView* normalTexture = nullptr;
     ID3D11ShaderResourceView* metallicTexture = nullptr;
     ID3D11ShaderResourceView* roughnessTexture = nullptr;
+    ID3D11ShaderResourceView* emissiveTexture = nullptr;  // Emissive/自发光纹理
     
     ID3D11SamplerState* sampler = nullptr;
     
@@ -46,6 +47,8 @@ struct RenderBatch {
     
     // === 变换矩阵 ===
     DirectX::XMMATRIX worldMatrix;
+    DirectX::XMFLOAT3 lightDir = { 0.0f, 1.0f, 0.0f };  // 光照方向（从物体指向太阳，已归一化）
+    bool isSphere = false;  // 是否是球体
     
     // === 绘制参数 ===
     uint32_t indexCount = 0;
@@ -116,8 +119,10 @@ public:
      * @brief 从ECS收集渲染批次
      * @param registry ECS注册表
      * @param cameraPos 相机位置（用于计算深度）
+     * @param sunPosition 太阳位置（用于计算光照方向）
      */
-    void CollectFromECS(entt::registry& registry, const DirectX::XMFLOAT3& cameraPos);
+    void CollectFromECS(entt::registry& registry, const DirectX::XMFLOAT3& cameraPos, 
+                        const DirectX::XMFLOAT3& sunPosition);
 
     /**
      * @brief 手动添加批次（用于程序化几何体）
@@ -147,8 +152,10 @@ public:
      * @brief 执行绘制（带状态缓存）
      * @param context D3D11设备上下文
      * @param perObjectCB PerObject常量缓冲区
+     * @param sunPosition 太阳位置（用于调试输出）
      */
-    void Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectCB);
+    void Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectCB, 
+                 const DirectX::XMFLOAT3& sunPosition = {0,0,0});
 
     /**
      * @brief 获取统计信息

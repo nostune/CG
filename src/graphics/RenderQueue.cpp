@@ -38,7 +38,8 @@ static resources::Shader* GetOrLoadShader(const std::string& vsName, const std::
 /**
  * @brief 从ECS收集渲染批次
  */
-void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& cameraPos) {
+void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& cameraPos,
+                                  const XMFLOAT3& sunPosition) {
     Clear();
     
     // ID映射表（用于计算sortKey）
@@ -80,6 +81,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         ID3D11ShaderResourceView* normalSRV = nullptr;
         ID3D11ShaderResourceView* metallicSRV = nullptr;
         ID3D11ShaderResourceView* roughnessSRV = nullptr;
+        ID3D11ShaderResourceView* emissiveSRV = nullptr;
         
         if (meshComp.material) {
             // Extract all PBR textures from material
@@ -87,6 +89,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
             normalSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->normalTextureSRV);
             metallicSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->metallicTextureSRV);
             roughnessSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->roughnessTextureSRV);
+            emissiveSRV = static_cast<ID3D11ShaderResourceView*>(meshComp.material->emissiveTextureSRV);
             
             // Backward compatibility: fallback to old shaderProgram field
             if (!albedoSRV && meshComp.material->shaderProgram) {
@@ -125,6 +128,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
             batch.normalTexture = normalSRV;
             batch.metallicTexture = metallicSRV;
             batch.roughnessTexture = roughnessSRV;
+            batch.emissiveTexture = emissiveSRV;
             batch.material = meshComp.material.get();
             
             // 分配Shader ID
@@ -155,6 +159,22 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         );
         batch.worldMatrix = scale * rotation * translation;
         
+        // === 计算光照方向 ===
+        // lightDir = normalize(sunPosition - objectPosition)
+        float dx = sunPosition.x - transformComp.position.x;
+        float dy = sunPosition.y - transformComp.position.y;
+        float dz = sunPosition.z - transformComp.position.z;
+        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+        
+        if (dist > 1.0f) {
+            // 有效：归一化光照方向
+            batch.lightDir = { dx / dist, dy / dist, dz / dist };
+        } else {
+            // 无效（太阳自身）：使用默认向上方向
+            batch.lightDir = { 0.0f, 1.0f, 0.0f };
+        }
+        batch.isSphere = true;
+        
         // === 计算深度 ===
         XMVECTOR objPos = XMLoadFloat3(&transformComp.position);
         XMVECTOR delta = XMVectorSubtract(objPos, camPos);
@@ -182,7 +202,8 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
 /**
  * @brief 执行绘制（带状态缓存）
  */
-void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectCB) {
+void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectCB, 
+                          const DirectX::XMFLOAT3& sunPosition) {
     if (!context || m_Batches.empty()) {
         return;
     }
@@ -287,17 +308,51 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
             lastRoughness = batch.roughnessTexture;
         }
         
+        // Texture slot 4: Emissive map
+        static ID3D11ShaderResourceView* lastEmissive = nullptr;
+        if (batch.emissiveTexture != lastEmissive) {
+            if (batch.emissiveTexture) {
+                context->PSSetShaderResources(4, 1, &batch.emissiveTexture);
+            } else {
+                ID3D11ShaderResourceView* nullSRV = nullptr;
+                context->PSSetShaderResources(4, 1, &nullSRV);
+            }
+            lastEmissive = batch.emissiveTexture;
+        }
+        
         // === 更新PerObject常量缓冲区 ===
         if (perObjectCB) {
+            // PerObjectBuffer 必须与 HLSL 完全匹配（96 字节）
             struct PerObjectData {
-                XMMATRIX world;
-                XMFLOAT4 color;
+                XMMATRIX world;             // 64 bytes (offset 0)
+                XMFLOAT4 color;             // 16 bytes (offset 64)
+                XMFLOAT3 lightDir;          // 12 bytes (offset 80) - 光照方向
+                float isSphere;             // 4 bytes  (offset 92) → total 96
             };
+            static_assert(sizeof(PerObjectData) == 96, "PerObjectData must be 96 bytes");
             
             PerObjectData objData;
             objData.world = XMMatrixTranspose(batch.worldMatrix);
-            // 从material读取albedo颜色,如果没有则使用白色
             objData.color = batch.material ? batch.material->albedo : XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+            objData.lightDir = batch.lightDir;  // 使用预计算的光照方向
+            objData.isSphere = batch.isSphere ? 1.0f : 0.0f;
+            
+            // 调试输出（只输出前5个batch）
+            static bool debugDone = false;
+            static int batchCount = 0;
+            if (!debugDone) {
+                printf("=== Batch #%d ===\n", batchCount);
+                printf("  indexCount = %u\n", batch.indexCount);
+                printf("  lightDir   = (%.3f, %.3f, %.3f)\n", 
+                       objData.lightDir.x, objData.lightDir.y, objData.lightDir.z);
+                printf("============================\n");
+                
+                batchCount++;
+                if (batchCount >= 5) {
+                    debugDone = true;
+                    printf("\n[Debug] First 5 batches shown.\n\n");
+                }
+            }
             
             D3D11_MAPPED_SUBRESOURCE mappedResource;
             if (SUCCEEDED(context->Map(perObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
@@ -307,6 +362,48 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
             
             // 绑定到slot 1 (shader中的register(b1))
             context->VSSetConstantBuffers(1, 1, &perObjectCB);
+            context->PSSetConstantBuffers(1, 1, &perObjectCB);  // 也绑定到像素着色器！
+        }
+        
+        // === 更新MaterialBuffer常量缓冲区 (b2) ===
+        static ID3D11Buffer* s_materialCB = nullptr;
+        if (!s_materialCB && g_CachedDevice) {
+            D3D11_BUFFER_DESC cbDesc = {};
+            cbDesc.ByteWidth = 32;  // MaterialBuffer size (must be 16-byte aligned)
+            cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+            cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            g_CachedDevice->CreateBuffer(&cbDesc, nullptr, &s_materialCB);
+        }
+        
+        if (s_materialCB) {
+            struct MaterialBuffer {
+                XMFLOAT3 emissiveColor;
+                float emissiveStrength;
+                float hasEmissiveTexture;
+                float padding[3];  // Padding to 32 bytes
+            };
+            
+            MaterialBuffer matData;
+            if (batch.material && batch.material->isEmissive) {
+                matData.emissiveColor = batch.material->emissiveColor;
+                matData.emissiveStrength = batch.material->emissiveStrength;
+                matData.hasEmissiveTexture = batch.emissiveTexture ? 1.0f : 0.0f;
+            } else {
+                matData.emissiveColor = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                matData.emissiveStrength = 0.0f;
+                matData.hasEmissiveTexture = 0.0f;
+            }
+            matData.padding[0] = matData.padding[1] = matData.padding[2] = 0.0f;
+            
+            D3D11_MAPPED_SUBRESOURCE mappedResource;
+            if (SUCCEEDED(context->Map(s_materialCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
+                memcpy(mappedResource.pData, &matData, sizeof(MaterialBuffer));
+                context->Unmap(s_materialCB, 0);
+            }
+            
+            // 绑定到slot 2 (shader中的register(b2))
+            context->PSSetConstantBuffers(2, 1, &s_materialCB);
         }
         
         // === 绑定顶点/索引缓冲区 ===

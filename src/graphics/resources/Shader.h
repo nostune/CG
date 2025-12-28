@@ -11,6 +11,10 @@ public:
     ~Shader();
 
     bool LoadFromFile(ID3D11Device* device, const std::string& vertexPath, const std::string& pixelPath);
+    
+    // 重载：支持简化顶点格式（仅位置，用于skybox等）
+    bool LoadFromFile(ID3D11Device* device, const std::string& vertexPath, const std::string& pixelPath, bool positionOnly);
+    
     void Bind(ID3D11DeviceContext* context) const;
     void Unbind(ID3D11DeviceContext* context) const;
     
@@ -21,7 +25,7 @@ public:
 
 private:
     bool LoadEmbeddedGridShader(ID3D11Device* device);
-    bool LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath);
+    bool LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath, bool positionOnly = false);
 
     std::string m_VertexPath;
     std::string m_PixelPath;

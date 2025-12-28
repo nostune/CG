@@ -3,8 +3,10 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <fstream>
+#include <shlwapi.h>
 
 #pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 using Microsoft::WRL::ComPtr;
 
@@ -28,6 +30,186 @@ bool TextureLoader::LoadFromFile(
     } else {
         return LoadWIC(device, filename, outTexture);
     }
+}
+
+bool TextureLoader::LoadFromMemory(
+    ID3D11Device* device,
+    const unsigned char* data,
+    size_t dataSize,
+    const std::string& formatHint,
+    ID3D11ShaderResourceView** outTexture
+) {
+    if (!device || !data || dataSize == 0 || !outTexture) {
+        DebugManager::GetInstance().Log("TextureLoader", "Invalid parameters for memory load");
+        return false;
+    }
+
+    return LoadWICFromMemory(device, data, dataSize, outTexture);
+}
+
+bool TextureLoader::CreateFromRGBA(
+    ID3D11Device* device,
+    const unsigned char* pixels,
+    uint32_t width,
+    uint32_t height,
+    ID3D11ShaderResourceView** outTexture
+) {
+    if (!device || !pixels || width == 0 || height == 0 || !outTexture) {
+        DebugManager::GetInstance().Log("TextureLoader", "Invalid parameters for RGBA creation");
+        return false;
+    }
+
+    // Create D3D11 texture
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.SampleDesc.Quality = 0;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    texDesc.CPUAccessFlags = 0;
+    texDesc.MiscFlags = 0;
+
+    UINT stride = width * 4;
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = pixels;
+    initData.SysMemPitch = stride;
+    initData.SysMemSlicePitch = stride * height;
+
+    ComPtr<ID3D11Texture2D> texture;
+    HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &texture);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create texture from RGBA");
+        return false;
+    }
+
+    // Create shader resource view
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = texDesc.Format;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+
+    hr = device->CreateShaderResourceView(texture.Get(), &srvDesc, outTexture);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create SRV from RGBA");
+        return false;
+    }
+
+    DebugManager::GetInstance().Log("TextureLoader", 
+        "Created texture from RGBA (" + std::to_string(width) + "x" + std::to_string(height) + ")");
+
+    return true;
+}
+
+bool TextureLoader::LoadWICFromMemory(
+    ID3D11Device* device, 
+    const unsigned char* data, 
+    size_t dataSize, 
+    ID3D11ShaderResourceView** outTexture
+) {
+    // Initialize COM
+    CoInitialize(nullptr);
+
+    ComPtr<IWICImagingFactory> wicFactory;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&wicFactory)
+    );
+
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create WIC factory");
+        return false;
+    }
+
+    // Create stream from memory
+    ComPtr<IWICStream> stream;
+    hr = wicFactory->CreateStream(&stream);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create WIC stream");
+        return false;
+    }
+
+    hr = stream->InitializeFromMemory(const_cast<BYTE*>(data), static_cast<DWORD>(dataSize));
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to initialize stream from memory");
+        return false;
+    }
+
+    // Create decoder from stream
+    ComPtr<IWICBitmapDecoder> decoder;
+    hr = wicFactory->CreateDecoderFromStream(
+        stream.Get(),
+        nullptr,
+        WICDecodeMetadataCacheOnDemand,
+        &decoder
+    );
+
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create decoder from memory stream");
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to get frame from memory texture");
+        return false;
+    }
+
+    // Convert to RGBA format
+    ComPtr<IWICFormatConverter> converter;
+    hr = wicFactory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to create format converter");
+        return false;
+    }
+
+    hr = converter->Initialize(
+        frame.Get(),
+        GUID_WICPixelFormat32bppRGBA,
+        WICBitmapDitherTypeNone,
+        nullptr,
+        0.0,
+        WICBitmapPaletteTypeCustom
+    );
+
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to initialize converter for memory texture");
+        return false;
+    }
+
+    // Get image dimensions
+    UINT width, height;
+    hr = converter->GetSize(&width, &height);
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to get image size");
+        return false;
+    }
+
+    // Copy pixel data
+    UINT stride = width * 4;
+    UINT imageSize = stride * height;
+    std::vector<BYTE> pixels(imageSize);
+
+    hr = converter->CopyPixels(
+        nullptr,
+        stride,
+        imageSize,
+        pixels.data()
+    );
+
+    if (FAILED(hr)) {
+        DebugManager::GetInstance().Log("TextureLoader", "Failed to copy pixels from memory texture");
+        return false;
+    }
+
+    // Create texture using the helper function
+    return CreateFromRGBA(device, pixels.data(), width, height, outTexture);
 }
 
 bool TextureLoader::LoadDDS(ID3D11Device* device, const std::string& filename, ID3D11ShaderResourceView** outTexture) {

@@ -183,15 +183,17 @@ int main(int argc, char* argv[]) {
         
         // ========================================
         // 1. 创建星球实体（扇区 + 重力源 + PhysX 地面 + 模型）
-        // 注：planet1.obj 本身已经是半径约64米的球体，不需要缩放
+        // 注：planet_earth.obj 是单位球（半径1），需要缩放到64米
         // ========================================
+        std::cout << "\n=== Loading Earth Model ===" << std::endl;
         auto planetEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
             scene->GetRegistry(), scene, device,
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\planet1.obj",
+            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\planet_earth.obj",
             "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Texture\\plastered_stone_wall_diff_2k.jpg",
             DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
-            DirectX::XMFLOAT3(10.0f, 10.0f, 10.0f)  // 不缩放，保持原始大小
+            DirectX::XMFLOAT3(PLANET_RADIUS, PLANET_RADIUS, PLANET_RADIUS)  // 缩放到半径64米
         );
+        std::cout << "[Earth] Entity created: " << (planetEntity != entt::null ? "SUCCESS" : "FAILED") << std::endl;
         
         if (planetEntity != entt::null) {
             // SectorComponent（扇区定义）
@@ -337,6 +339,7 @@ int main(int argc, char* argv[]) {
             std::cout << "[Player] ERROR: Failed to load model!" << std::endl;
         }
         
+#if 0  // 暂时禁用飞船加载，加速调试
         // ========================================
         // 3. 创建飞船实体（在星球表面）
         // 飞船模型原始尺寸很大，需要缩小到5%
@@ -422,6 +425,96 @@ int main(int argc, char* argv[]) {
                       << " with collision box (" << BOX_HALF_X*2 << "x" << BOX_HALF_Y*2 << "x" << BOX_HALF_Z*2 << ")" << std::endl;
         } else {
             std::cout << "[Spacecraft] ERROR: Failed to load model!" << std::endl;
+        }
+#endif  // 暂时禁用飞船
+        
+        // ========================================
+        // 4. 创建太阳（轨道中心，GLB模型，带发光材质）
+        // ========================================
+        std::cout << "\n=== Loading Sun (GLB with Emissive) ===" << std::endl;
+        entt::entity sunEntity = entt::null;
+        {
+            // 先加载模型获取尺寸信息
+            outer_wilds::resources::LoadedModel sunModel;
+            if (outer_wilds::resources::AssimpLoader::LoadFromFile(
+                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\sun\\sun_final.glb", sunModel)) {
+                
+                std::cout << "[Sun] Model bounds: " 
+                          << sunModel.bounds.size.x << " x " 
+                          << sunModel.bounds.size.y << " x " 
+                          << sunModel.bounds.size.z << std::endl;
+                std::cout << "[Sun] Bounding sphere radius: " << sunModel.bounds.radius << std::endl;
+            }
+            
+            // 太阳缩放：设置太阳半径约为50米（比地球小一些，方便观察）
+            const float SUN_SCALE = 25.0f;  // 调整这个值来改变太阳大小
+            
+            // 太阳位于轨道中心
+            sunEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+                scene->GetRegistry(), scene, device,
+                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\sun\\sun_final.glb",
+                "",  // 使用GLB嵌入式纹理（包含发光贴图）
+                DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),  // 轨道中心
+                DirectX::XMFLOAT3(SUN_SCALE, SUN_SCALE, SUN_SCALE)   // 缩放到合适大小
+            );
+            
+            if (sunEntity != entt::null) {
+                // 给太阳添加自转
+                auto& sunOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(sunEntity);
+                sunOrbit.orbitEnabled = false;           // 太阳不公转（它是中心）
+                sunOrbit.rotationEnabled = true;         // 太阳自转
+                sunOrbit.rotationPeriod = 60.0f;         // 自转周期60秒
+                sunOrbit.rotationAxis = { 0.0f, 1.0f, 0.0f };
+                
+                // 设置太阳实体给渲染系统（用于动态光照）
+                engine.GetRenderSystem()->SetSunEntity(sunEntity);
+                
+                std::cout << "[Sun] Created at orbit center (0, 0, 0) with rotation" << std::endl;
+            } else {
+                std::cout << "[Sun] ERROR: Failed to load GLB model!" << std::endl;
+            }
+        }
+        
+        // ========================================
+        // 5. 创建月球（围绕地球的轨道，使用OBJ模型）
+        // ========================================
+        std::cout << "\n=== Loading Moon (OBJ with Earth Orbit) ===" << std::endl;
+        {
+            // 月球围绕地球的轨道参数
+            const float MOON_ORBIT_RADIUS = 120.0f;  // 月球到地球的距离（地球半径64m，月球轨道120m比较合适）
+            const float MOON_ORBIT_PERIOD = 45.0f;   // 公转周期（秒）- 比地球公转快
+            const float MOON_SCALE = 1.5f;           // 月球缩放（比地球小，约1/4大小）
+            
+            // 初始位置需要考虑地球的初始位置（地球初始在X=200处，因为角度为0）
+            const float EARTH_INITIAL_X = 200.0f;    // 地球轨道半径
+            
+            auto moonEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+                scene->GetRegistry(), scene, device,
+                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\planet_earth.obj",  // 使用新的球体模型
+                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Texture\\plastered_stone_wall_diff_2k.jpg",  // 使用纹理
+                DirectX::XMFLOAT3(EARTH_INITIAL_X + MOON_ORBIT_RADIUS, 0.0f, 0.0f),  // 初始位置（地球右侧）
+                DirectX::XMFLOAT3(MOON_SCALE, MOON_SCALE, MOON_SCALE)
+            );
+            
+            if (moonEntity != entt::null) {
+                // OrbitComponent（月球轨道 - 围绕地球公转！）
+                auto& orbitComp = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(moonEntity);
+                orbitComp.orbitParent = planetEntity;                   // 【关键】围绕地球公转！
+                orbitComp.orbitCenter = { EARTH_INITIAL_X, 0.0f, 0.0f }; // 初始中心（会被orbitParent覆盖）
+                orbitComp.orbitRadius = MOON_ORBIT_RADIUS;              // 轨道半径（离地球的距离）
+                orbitComp.orbitPeriod = MOON_ORBIT_PERIOD;              // 公转周期
+                orbitComp.orbitAngle = 0.0f;                            // 初始角度
+                orbitComp.orbitNormal = { 0.0f, 1.0f, 0.0f };          // 在XZ平面公转
+                orbitComp.orbitInclination = 0.1f;                      // 轻微轨道倾斜（更真实）
+                orbitComp.orbitEnabled = true;
+                orbitComp.rotationEnabled = true;                       // 月球潮汐锁定（自转=公转周期）
+                orbitComp.rotationPeriod = MOON_ORBIT_PERIOD;           // 自转周期与公转同步
+                
+                std::cout << "[Moon] Created orbiting Earth: radius=" << MOON_ORBIT_RADIUS 
+                          << "m, period=" << MOON_ORBIT_PERIOD << "s, scale=" << MOON_SCALE << std::endl;
+            } else {
+                std::cout << "[Moon] ERROR: Failed to load OBJ model!" << std::endl;
+            }
         }
         
         std::cout << "\n=== Full Test Scene Ready ===" << std::endl;

@@ -10,6 +10,8 @@ namespace outer_wilds {
 namespace resources {
 
 bool OBJLoader::LoadFromFile(const std::string& filename, Mesh& mesh) {
+    std::cout << "[OBJLoader] Starting load: " << filename << std::endl;
+    
     std::vector<DirectX::XMFLOAT3> positions;
     std::vector<DirectX::XMFLOAT3> normals;
     std::vector<DirectX::XMFLOAT2> texCoords;
@@ -17,8 +19,14 @@ bool OBJLoader::LoadFromFile(const std::string& filename, Mesh& mesh) {
     std::unordered_map<std::string, DirectX::XMFLOAT3> materials;  // 材质名 -> Kd颜色
 
     if (!ParseOBJFile(filename, positions, normals, texCoords, faces, materials)) {
+        std::cout << "[OBJLoader] ERROR: Failed to parse file" << std::endl;
         return false;
     }
+    
+    std::cout << "[OBJLoader] Parsed: " << positions.size() << " positions, " 
+              << normals.size() << " normals, " 
+              << texCoords.size() << " texcoords, "
+              << faces.size() << " triangles" << std::endl;
 
     // Convert to mesh vertices and indices
     std::vector<Vertex> vertices;
@@ -129,30 +137,51 @@ bool OBJLoader::ParseOBJFile(const std::string& filename,
             texCoords.push_back(texCoord);
         }
         else if (type == "f") {
-            OBJFace face = {};
-            face.materialColor = currentColor;  // 存储当前材质颜色
+            // 读取所有顶点（可能是三角形、四边形或多边形）
+            std::vector<int> posIndices, texIndices, normIndices;
             std::string vertexStr;
-
-            for (int i = 0; i < 3 && iss >> vertexStr; ++i) {
+            
+            while (iss >> vertexStr) {
                 std::replace(vertexStr.begin(), vertexStr.end(), '/', ' ');
                 std::istringstream vertexIss(vertexStr);
-
-                vertexIss >> face.positionIndices[i];
-
+                
+                int posIdx = 0, texIdx = 0, normIdx = 0;
+                vertexIss >> posIdx;
                 if (vertexIss.peek() != EOF) {
-                    vertexIss >> face.texCoordIndices[i];
-                } else {
-                    face.texCoordIndices[i] = 0;
+                    vertexIss >> texIdx;
                 }
-
                 if (vertexIss.peek() != EOF) {
-                    vertexIss >> face.normalIndices[i];
-                } else {
-                    face.normalIndices[i] = 0;
+                    vertexIss >> normIdx;
                 }
+                
+                posIndices.push_back(posIdx);
+                texIndices.push_back(texIdx);
+                normIndices.push_back(normIdx);
             }
-
-            faces.push_back(face);
+            
+            // 三角化：把多边形分成三角形 (fan triangulation)
+            // 例如四边形 [0,1,2,3] -> 三角形 [0,1,2] 和 [0,2,3]
+            for (size_t i = 1; i + 1 < posIndices.size(); ++i) {
+                OBJFace face = {};
+                face.materialColor = currentColor;
+                
+                // 第一个顶点总是 0
+                face.positionIndices[0] = posIndices[0];
+                face.texCoordIndices[0] = texIndices[0];
+                face.normalIndices[0] = normIndices[0];
+                
+                // 第二个顶点是 i
+                face.positionIndices[1] = posIndices[i];
+                face.texCoordIndices[1] = texIndices[i];
+                face.normalIndices[1] = normIndices[i];
+                
+                // 第三个顶点是 i+1
+                face.positionIndices[2] = posIndices[i + 1];
+                face.texCoordIndices[2] = texIndices[i + 1];
+                face.normalIndices[2] = normIndices[i + 1];
+                
+                faces.push_back(face);
+            }
         }
     }
 

@@ -3,6 +3,7 @@
 #include <DirectXMath.h>
 #include <string>
 #include <memory>
+#include <vector>
 #include <d3d11.h>
 
 namespace outer_wilds {
@@ -12,6 +13,7 @@ class Scene;
 namespace resources {
     class Mesh;
     class Material;
+    struct EmbeddedTexture;  // For GLB embedded textures
 }
 
 // Physics configuration for loaded models
@@ -135,6 +137,17 @@ public:
         const std::string& normalPath = "",
         const std::string& metallicPath = "",
         const std::string& roughnessPath = ""
+    );
+
+    /**
+     * Create material from embedded textures (for GLB/GLTF formats)
+     * @param device D3D11 device
+     * @param embeddedTextures Vector of embedded texture data
+     * @return Shared pointer to material, or nullptr on failure
+     */
+    static std::shared_ptr<resources::Material> CreateMaterialFromEmbedded(
+        ID3D11Device* device,
+        const std::vector<resources::EmbeddedTexture>& embeddedTextures
     );
 
     /**

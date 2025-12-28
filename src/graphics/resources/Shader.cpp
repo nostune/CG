@@ -18,6 +18,10 @@ Shader::~Shader() {
 }
 
 bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, const std::string& pixelPath) {
+    return LoadFromFile(device, vertexPath, pixelPath, false);
+}
+
+bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, const std::string& pixelPath, bool positionOnly) {
     m_VertexPath = vertexPath;
     m_PixelPath = pixelPath;
 
@@ -38,7 +42,7 @@ bool Shader::LoadFromFile(ID3D11Device* device, const std::string& vertexPath, c
         return LoadEmbeddedGridShader(device);
     } else {
         // Load from HLSL file (e.g., shaders/textured.hlsl)
-        return LoadFromHLSLFile(device, vertexPath, pixelPath);
+        return LoadFromHLSLFile(device, vertexPath, pixelPath, positionOnly);
     }
 }
 
@@ -188,7 +192,7 @@ bool Shader::LoadEmbeddedGridShader(ID3D11Device* device) {
     return true;
 }
 
-bool Shader::LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath) {
+bool Shader::LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, const std::string& psPath, bool positionOnly) {
     // ============================================
     // Construct HLSL file path from shader name
     // ============================================
@@ -196,18 +200,37 @@ bool Shader::LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, c
     // Both vertex and pixel shaders are in the same .hlsl file
     // ============================================
     
-    std::string hlslFile = vsPath;
+    std::string baseName = vsPath;
     // Remove .vs or .ps extension, expect .hlsl
-    size_t dotPos = hlslFile.find_last_of('.');
+    size_t dotPos = baseName.find_last_of('.');
     if (dotPos != std::string::npos) {
-        hlslFile = hlslFile.substr(0, dotPos);
+        baseName = baseName.substr(0, dotPos);
     }
-    hlslFile = "shaders/" + hlslFile + ".hlsl";
     
-    // Read HLSL file
-    std::ifstream file(hlslFile);
+    // 尝试多个可能的路径
+    std::vector<std::string> searchPaths = {
+        "shaders/" + baseName + ".hlsl",
+        "../shaders/" + baseName + ".hlsl",
+        "../../shaders/" + baseName + ".hlsl",
+        "C:/Users/kkakk/homework/OuterWilds/shaders/" + baseName + ".hlsl"  // 绝对路径兜底
+    };
+    
+    std::string hlslFile;
+    std::ifstream file;
+    
+    for (const auto& path : searchPaths) {
+        file.open(path);
+        if (file.is_open()) {
+            hlslFile = path;
+            break;
+        }
+    }
+    
     if (!file.is_open()) {
-        DebugManager::GetInstance().Log("Shader", "Failed to open HLSL file: " + hlslFile);
+        DebugManager::GetInstance().Log("Shader", "Failed to open HLSL file. Tried paths:");
+        for (const auto& path : searchPaths) {
+            DebugManager::GetInstance().Log("Shader", "  - " + path);
+        }
         return false;
     }
     
@@ -294,26 +317,43 @@ bool Shader::LoadFromHLSLFile(ID3D11Device* device, const std::string& vsPath, c
     }
     
     // Create input layout
-    D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    };
-    
-    hr = device->CreateInputLayout(
-        layoutDesc,
-        ARRAYSIZE(layoutDesc),
-        vsBlob->GetBufferPointer(),
-        vsBlob->GetBufferSize(),
-        &inputLayout
-    );
+    HRESULT hrLayout;
+    if (positionOnly) {
+        // 简化的顶点格式（仅位置 - 用于skybox等）
+        D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        };
+        
+        hrLayout = device->CreateInputLayout(
+            layoutDesc,
+            ARRAYSIZE(layoutDesc),
+            vsBlob->GetBufferPointer(),
+            vsBlob->GetBufferSize(),
+            &inputLayout
+        );
+    } else {
+        // 完整的顶点格式
+        D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        };
+        
+        hrLayout = device->CreateInputLayout(
+            layoutDesc,
+            ARRAYSIZE(layoutDesc),
+            vsBlob->GetBufferPointer(),
+            vsBlob->GetBufferSize(),
+            &inputLayout
+        );
+    }
     
     vsBlob->Release();
     psBlob->Release();
     
-    if (FAILED(hr)) {
+    if (FAILED(hrLayout)) {
         DebugManager::GetInstance().Log("Shader", "Failed to create input layout");
         return false;
     }
