@@ -25,7 +25,8 @@ private:
     void SyncTransformsToPhysics(entt::registry& registry);
 
     std::shared_ptr<Scene> m_Scene;
-    DirectX::XMFLOAT3 m_Gravity = { 0.0f, -9.81f, 0.0f };
+    // 【修复】禁用全局重力，使用自定义星球重力系统 (GravitySystem + ApplyGravitySystem)
+    DirectX::XMFLOAT3 m_Gravity = { 0.0f, 0.0f, 0.0f };
     float m_TimeAccumulator = 0.0f;
     float m_FixedTimeStep = 1.0f / 60.0f;
 };

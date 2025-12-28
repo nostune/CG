@@ -39,11 +39,6 @@ static resources::Shader* GetOrLoadShader(const std::string& vsName, const std::
  * @brief 从ECS收集渲染批次
  */
 void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& cameraPos) {
-    static int collectDebugCount = 0;
-    if (collectDebugCount++ < 3) {
-        std::cout << "[RenderQueue::CollectFromECS] IMMEDIATE: Called #" << collectDebugCount << std::endl;
-    }
-    
     Clear();
     
     // ID映射表（用于计算sortKey）
@@ -119,18 +114,6 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         // Fallback to basic shader if no material
         if (!shaderToUse && g_CachedDevice) {
             shaderToUse = GetOrLoadShader("basic.vs", "basic.ps", g_CachedDevice);
-        }
-        
-        // === 调试：输出shader解析结果 ===
-        static int debugCount = 0;
-        if (debugCount++ < 5) {  // 输出前5个entity
-            std::cout << "[RenderQueue::Collect] Entity #" << debugCount 
-                      << ": shader=" << (shaderToUse ? "OK" : "NULL")
-                      << ", albedo=" << (albedoSRV ? "OK" : "NULL")
-                      << ", normal=" << (normalSRV ? "OK" : "NULL")
-                      << ", metallic=" << (metallicSRV ? "OK" : "NULL")
-                      << ", roughness=" << (roughnessSRV ? "OK" : "NULL")
-                      << std::endl;
         }
         
         // 绑定Shader和多纹理到batch

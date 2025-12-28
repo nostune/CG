@@ -53,10 +53,15 @@ struct GravitySourceComponent {
     float CalculateGravityStrength(float distance) const {
         if (!isActive) return 0.0f;
         
+        // 超出影响范围，返回0
+        float maxDist = GetInfluenceRadius();
+        if (distance > maxDist) return 0.0f;
+        
         if (useRealisticGravity) {
             // 真实重力公式（简化版，不使用实际G常数）
             // 在半径处应该等于 surfaceGravity
             float normalizedDistance = distance / radius;
+            if (normalizedDistance < 0.01f) normalizedDistance = 0.01f;  // 避免除0
             return surfaceGravity / (normalizedDistance * normalizedDistance);
         }
         else {
@@ -67,8 +72,8 @@ struct GravitySourceComponent {
             }
             else {
                 // 远离表面 - 线性衰减到大气层边界
-                float maxDist = GetInfluenceRadius();
                 float t = (distance - radius * 1.5f) / (maxDist - radius * 1.5f);
+                t = (t > 1.0f) ? 1.0f : t;  // 限制t不超过1
                 return surfaceGravity * (1.0f - t);
             }
         }

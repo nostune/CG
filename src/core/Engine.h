@@ -7,22 +7,16 @@
 
 namespace outer_wilds {
 
+// 核心系统前向声明
 class RenderSystem;
 class PhysicsSystem;
+class SectorPhysicsSystem;
+class OrbitSystem;
 class PlayerSystem;
-class GravitySystem;
-class ApplyGravitySystem;
-class PlayerAlignmentSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
-class OrbitSystem;
-class SectorSystem;
 class AudioSystem;
 class UISystem;
-
-namespace systems {
-    class SpacecraftControlSystem;
-}
 
 class Engine {
 public:
@@ -67,17 +61,13 @@ private:
     // Core systems
     std::shared_ptr<RenderSystem> m_RenderSystem;
     std::shared_ptr<PhysicsSystem> m_PhysicsSystem;
+    std::shared_ptr<SectorPhysicsSystem> m_SectorPhysicsSystem;
+    std::shared_ptr<OrbitSystem> m_OrbitSystem;
     std::shared_ptr<PlayerSystem> m_PlayerSystem;
-    std::shared_ptr<GravitySystem> m_GravitySystem;
-    std::shared_ptr<ApplyGravitySystem> m_ApplyGravitySystem;
-    std::shared_ptr<PlayerAlignmentSystem> m_PlayerAlignmentSystem;
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
-    std::shared_ptr<OrbitSystem> m_OrbitSystem;
-    std::shared_ptr<SectorSystem> m_SectorSystem;
     std::shared_ptr<AudioSystem> m_AudioSystem;
     std::shared_ptr<UISystem> m_UISystem;
-    std::shared_ptr<systems::SpacecraftControlSystem> m_SpacecraftControlSystem;
 
     // Common resources
     std::shared_ptr<resources::Mesh> m_PlanetMesh;

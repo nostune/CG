@@ -3,13 +3,18 @@
 #include "TimeManager.h"
 #include "../graphics/RenderSystem.h"
 #include "../physics/PhysicsSystem.h"
-#include "../physics/GravitySystem.h"
-#include "../physics/ApplyGravitySystem.h"
-#include "../physics/SectorSystem.h"
+#include "../physics/SectorPhysicsSystem.h"
+#include "../physics/OrbitSystem.h"
+// === 【已禁用】旧物理系统 - 等待重构 ===
+// #include "../physics/GravitySystem.h"
+// #include "../physics/ApplyGravitySystem.h"
+// #include "../physics/SectorSystem.h"
 #include "../gameplay/PlayerSystem.h"
-#include "../gameplay/PlayerAlignmentSystem.h"
-#include "../gameplay/OrbitSystem.h"
-#include "../gameplay/SpacecraftControlSystem.h"
+// #include "../gameplay/PlayerAlignmentSystem.h"
+// #include "../gameplay/OrbitSystem.h"
+// #include "../gameplay/SpacecraftControlSystem.h"
+// #include "../gameplay/SpacecraftKinematicSystem.h"
+// === 【已禁用】旧物理系统结束 ===
 #include "../gameplay/components/SpacecraftComponent.h"
 #include "../graphics/FreeCameraSystem.h"
 #include "../graphics/CameraModeSystem.h"
@@ -51,29 +56,30 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     }
     DebugManager::GetInstance().Log("RenderBackend", "RenderBackend initialized successfully");
 
+    // === 物理系统 ===
     m_PhysicsSystem = AddSystem<PhysicsSystem>();
     m_PhysicsSystem->Initialize(m_SceneManager->GetActiveScene());
-
-    // 轨道系统（更新天体世界位置）
+    
+    // 扇区物理系统（重力、坐标转换）
+    m_SectorPhysicsSystem = AddSystem<SectorPhysicsSystem>();
+    m_SectorPhysicsSystem->Initialize(m_SceneManager->GetActiveScene());
+    
+    // 轨道系统（星球公转/自转）
     m_OrbitSystem = AddSystem<OrbitSystem>();
+    m_OrbitSystem->Initialize(m_SceneManager->GetActiveScene());
 
-    // Sector系统（管理局部坐标系，在轨道更新后、物理模拟前）
-    m_SectorSystem = AddSystem<SectorSystem>();
-
-    // 重力系统（在PhysicsSystem之前，用于计算重力）
-    m_GravitySystem = AddSystem<GravitySystem>();
-
-    // 应用重力系统（在GravitySystem之后、PhysicsSystem之前，将重力力应用到刚体）
-    m_ApplyGravitySystem = AddSystem<ApplyGravitySystem>();
-
-    // 玩家对齐系统（在PlayerSystem之前，用于调整玩家姿态）
-    m_PlayerAlignmentSystem = AddSystem<PlayerAlignmentSystem>();
+    // === 【已禁用】旧物理/轨道/对齐系统 - 等待重构 ===
+    // m_OrbitSystem = AddSystem<OrbitSystem>();
+    // m_SectorSystem = AddSystem<SectorSystem>();
+    // m_GravitySystem = AddSystem<GravitySystem>();
+    // m_ApplyGravitySystem = AddSystem<ApplyGravitySystem>();
+    // m_PlayerAlignmentSystem = AddSystem<PlayerAlignmentSystem>();
+    // m_SpacecraftKinematicSystem = AddSystem<systems::SpacecraftKinematicSystem>();
+    // m_SpacecraftControlSystem = AddSystem<systems::SpacecraftControlSystem>();
+    // === 【已禁用】结束 ===
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
-
-    // 飞船控制系统（纯物理模拟）
-    m_SpacecraftControlSystem = AddSystem<systems::SpacecraftControlSystem>();
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();
@@ -127,7 +133,14 @@ void Engine::MainLoop() {
         DispatchMessage(&msg);
         
         if (msg.message == WM_QUIT) {
+            std::cout << "[Engine] Received WM_QUIT, stopping..." << std::endl;
             m_Running = false;
+        }
+        if (msg.message == WM_CLOSE) {
+            std::cout << "[Engine] Received WM_CLOSE" << std::endl;
+        }
+        if (msg.message == WM_DESTROY) {
+            std::cout << "[Engine] Received WM_DESTROY" << std::endl;
         }
     }
 
@@ -142,56 +155,53 @@ void Engine::MainLoop() {
 }
 
 void Engine::Update() {
-    static int frameNum = 0;
-    frameNum++;
-    
-    if (frameNum <= 3) {
-        std::cout << "[Engine::Update] Frame " << frameNum << " start" << std::endl;
-    }
-    
     if (!m_SceneManager || !m_SceneManager->GetActiveScene()) return;
     auto& registry = m_SceneManager->GetActiveScene()->GetRegistry();
 
-    // === 更新顺序说明 ===
-    // 1. OrbitSystem: 更新天体位置（圆弧运动）
-    // 2. SectorSystem::Update: 同步Sector世界位置
-    // 3. GravitySystem/ApplyGravitySystem: 处理重力
-    // 4. PlayerSystem/CameraModeSystem/FreeCameraSystem: 处理玩家输入和相机
-    // 5. PhysX模拟: 物理碰撞、摩擦等
-    // 6. SectorSystem::PostPhysicsUpdate: 将局部坐标转换为世界坐标
-    // 7. RenderSystem: 渲染（最后执行！）
+    // ============================================
+    // 更新顺序（严格按此执行）
+    // ============================================
+    // 1. 轨道系统（更新星球位置）
+    // 2. 输入/游戏逻辑系统
+    // 3. SectorPhysicsSystem::PrePhysicsUpdate (重力、力)
+    // 4. PhysXManager::Update (simulate + fetchResults)
+    // 5. SectorPhysicsSystem::PostPhysicsUpdate (坐标转换、扇区同步)
+    // 6. 相机系统
+    // 7. 渲染系统
+    // 
+    // 【规则】任何修改 PhysX Actor 的代码必须标注:
+    //   // [来源: XXXSystem] 操作描述
+    // ============================================
 
-    // 执行所有系统的Update（跳过RenderSystem，最后单独调用）
-    int sysIdx = 0;
-    for (auto& system : m_Systems) {
-        // 跳过 RenderSystem，它需要在最后执行
-        if (system.get() == static_cast<System*>(m_RenderSystem.get())) {
-            continue;
-        }
-        if (frameNum <= 3) {
-            std::cout << "[Engine::Update] Frame " << frameNum << " system " << sysIdx << " start" << std::endl;
-        }
-        system->Update(m_DeltaTime, registry);
-        if (frameNum <= 3) {
-            std::cout << "[Engine::Update] Frame " << frameNum << " system " << sysIdx << " done" << std::endl;
-        }
-        sysIdx++;
+    // 1. 轨道系统：更新星球公转/自转位置（必须在其他系统之前）
+    if (m_OrbitSystem) {
+        m_OrbitSystem->Update(m_DeltaTime, registry);
     }
     
-    if (frameNum <= 300) {
-        std::cout << "[Engine::Update] Frame " << frameNum << " PhysX start" << std::endl;
+    // 2. 游戏逻辑系统（跳过 RenderSystem、SectorPhysicsSystem、OrbitSystem）
+    for (auto& system : m_Systems) {
+        if (system.get() == static_cast<System*>(m_RenderSystem.get())) continue;
+        if (system.get() == static_cast<System*>(m_SectorPhysicsSystem.get())) continue;
+        if (system.get() == static_cast<System*>(m_OrbitSystem.get())) continue;
+        system->Update(m_DeltaTime, registry);
     }
-    // PhysX物理模拟
+    
+    // 3. 物理前处理：计算重力、应用力、同步 Kinematic
+    if (m_SectorPhysicsSystem) {
+        m_SectorPhysicsSystem->PrePhysicsUpdate(m_DeltaTime, registry);
+    }
+    
+    // 4. PhysX 物理模拟
     PhysXManager::GetInstance().Update(m_DeltaTime);
-
-    // Sector系统后处理：同步PhysX结果到世界坐标（在渲染前！）
-    if (m_SectorSystem) {
-        m_SectorSystem->PostPhysicsUpdate(registry);
+    
+    // 5. 物理后处理：读取结果、坐标转换、扇区同步
+    if (m_SectorPhysicsSystem) {
+        m_SectorPhysicsSystem->PostPhysicsUpdate(m_DeltaTime, registry);
     }
 
     DebugManager::GetInstance().Update(m_DeltaTime);
 
-    // 渲染系统最后执行（在所有坐标转换完成后）
+    // 6-7. 渲染系统最后执行
     if (m_RenderSystem) {
         m_RenderSystem->Update(m_DeltaTime, registry);
     }

@@ -2,6 +2,12 @@
 #include <PxPhysicsAPI.h>
 #include <memory>
 #include <iostream>
+#include <vector>
+#include <string>
+#include <limits>
+#if defined(_WIN32)
+#include <intrin.h>
+#endif
 
 namespace outer_wilds {
 
@@ -37,6 +43,9 @@ public:
     bool Initialize();
     void Shutdown();
     void Update(float deltaTime);
+    
+    // 崩溃时转储场景状态
+    void DumpSceneState(const char* context);
     
     physx::PxPhysics* GetPhysics() { return m_Physics; }
     physx::PxScene* GetScene() { return m_Scene; }

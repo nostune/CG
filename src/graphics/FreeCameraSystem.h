@@ -20,6 +20,11 @@ public:
 
 private:
     /// <summary>
+    /// 处理全局按键（ESC+Backspace解除鼠标锁定，Shift+ESC退出）
+    /// </summary>
+    void HandleGlobalKeys();
+    
+    /// <summary>
     /// 更新自由相机的移动
     /// </summary>
     void UpdateFreeCameraMovement(float deltaTime, entt::registry& registry);

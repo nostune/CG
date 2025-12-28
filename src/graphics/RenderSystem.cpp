@@ -20,13 +20,6 @@ void RenderSystem::Update(float deltaTime, entt::registry& registry) {
     m_UpdateCounter++;
     bool shouldDebug = (m_UpdateCounter % 100 == 0);
     
-    // 调试：确认Update被调用
-    static int updateDebugCount = 0;
-    if (updateDebugCount < 3) {
-        std::cout << "[RenderSystem::Update] IMMEDIATE: Called #" << (++updateDebugCount) 
-                  << ", frame=" << m_UpdateCounter << std::endl;
-    }
-    
     if (!m_Backend) return;
 
     // Get current active scene
@@ -63,11 +56,6 @@ bool RenderSystem::InitializeBackend(void* hwnd, int width, int height) {
 }
 
 void RenderSystem::RenderScene(components::CameraComponent* camera, entt::registry& registry, bool shouldDebug) {
-    static int renderCount = 0;
-    if (renderCount++ < 3) {
-        std::cout << "[RenderSystem::RenderScene] IMMEDIATE: Called #" << renderCount << std::endl;
-    }
-    
     if (!m_Backend || !camera) return;
 
     auto device = static_cast<ID3D11Device*>(m_Backend->GetDevice());

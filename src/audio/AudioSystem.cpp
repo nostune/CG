@@ -7,6 +7,8 @@
 
 namespace outer_wilds {
 
+static bool s_AudioDebug = false;
+
 AudioSystem::AudioSystem() {
 }
 
@@ -20,7 +22,7 @@ bool AudioSystem::InitializeAudio() {
         return false;
     }
     
-    std::cout << "AudioSystem initialized successfully" << std::endl;
+
     return true;
 }
 
@@ -110,10 +112,6 @@ bool AudioSystem::LoadMP3File(const std::string& filePath, AudioSource& outSourc
     // Free minimp3 buffer
     free(info.buffer);
     
-    std::cout << "Loaded MP3: " << filePath << std::endl;
-    std::cout << "  Channels: " << info.channels << ", Sample Rate: " << info.hz << " Hz" << std::endl;
-    std::cout << "  Samples: " << info.samples << ", Duration: " << (float)info.samples / info.hz / info.channels << " seconds" << std::endl;
-    
     return true;
 }
 
@@ -189,9 +187,9 @@ bool AudioSystem::LoadPlaylistFromDirectory(const std::string& directoryPath) {
             std::cerr << "No MP3 files found in directory: " << directoryPath << std::endl;
             return false;
         }
-        
+        if(s_AudioDebug){
         std::cout << "Loaded " << m_Playlist.size() << " tracks from: " << directoryPath << std::endl;
-        
+        }
         // Load and play the first track
         m_CurrentTrackIndex = 0;
         if (!LoadMP3(m_Playlist[m_CurrentTrackIndex])) {

@@ -24,9 +24,40 @@ void FreeCameraSystem::Initialize(std::shared_ptr<Scene> scene) {
 }
 
 void FreeCameraSystem::Update(float deltaTime, entt::registry& registry) {
+    // 处理全局按键（ESC+Backspace 解除鼠标锁定，Shift+ESC 退出程序）
+    HandleGlobalKeys();
+    
     UpdateFreeCameraRotation(deltaTime, registry);
     UpdateFreeCameraMovement(deltaTime, registry);
     SyncToCamera(registry);
+}
+
+void FreeCameraSystem::HandleGlobalKeys() {
+    static bool escWasPressed = false;
+    static bool backspaceWasPressed = false;
+    static bool shiftWasPressed = false;
+    
+    bool escPressed = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    bool backspacePressed = (GetAsyncKeyState(VK_BACK) & 0x8000) != 0;
+    bool shiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    
+    // ESC + Backspace: 切换鼠标锁定
+    if (escPressed && backspacePressed && (!escWasPressed || !backspaceWasPressed)) {
+        auto& inputMgr = InputManager::GetInstance();
+        bool newState = !inputMgr.IsMouseLookEnabled();
+        inputMgr.SetMouseLookEnabled(newState);
+        DebugManager::GetInstance().Log("FreeCam", newState ? "Mouse look ENABLED" : "Mouse look DISABLED");
+    }
+    
+    // Shift + ESC: 退出程序（发送 WM_CLOSE）
+    if (shiftPressed && escPressed && !shiftWasPressed) {
+        DebugManager::GetInstance().Log("FreeCam", "Shift+ESC: Requesting exit...");
+        PostQuitMessage(0);
+    }
+    
+    escWasPressed = escPressed;
+    backspaceWasPressed = backspacePressed;
+    shiftWasPressed = shiftPressed;
 }
 
 void FreeCameraSystem::Shutdown() {

@@ -78,38 +78,6 @@ public:
     );
 
     /**
-     * Load a model as a static object in a Sector
-     * 
-     * Creates an entity with:
-     * - TransformComponent (world position for rendering)
-     * - InSectorComponent (local position for physics)
-     * - SectorEntityTypeComponent (StaticObject)
-     * - PhysX RigidStatic at local coordinates
-     * 
-     * @param registry ECS registry
-     * @param scene Scene to add entity to
-     * @param device D3D11 device
-     * @param sectorEntity The Sector this object belongs to
-     * @param objPath Path to model file
-     * @param texturePath Path to texture (optional)
-     * @param localPosition Position relative to Sector center
-     * @param scale Scale factor
-     * @param physicsOpts Physics configuration
-     * @return Entity ID
-     */
-    static entt::entity LoadStaticObjectInSector(
-        entt::registry& registry,
-        std::shared_ptr<Scene> scene,
-        ID3D11Device* device,
-        entt::entity sectorEntity,
-        const std::string& objPath,
-        const std::string& texturePath,
-        const DirectX::XMFLOAT3& localPosition,
-        const DirectX::XMFLOAT3& scale,
-        const PhysicsOptions* physicsOpts = nullptr
-    );
-
-    /**
      * Load entire scene from file (for large scenes)
      * @param registry ECS registry
      * @param scene Scene to add entities to
