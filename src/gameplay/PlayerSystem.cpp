@@ -11,12 +11,14 @@
 
 #include "PlayerSystem.h"
 #include "../scene/components/TransformComponent.h"
+#include "../scene/components/ChildEntityComponent.h"
 #include "components/PlayerComponent.h"
 #include "components/PlayerInputComponent.h"
 #include "components/CharacterControllerComponent.h"
 #include "components/SpacecraftComponent.h"
 #include "../graphics/components/CameraComponent.h"
 #include "../graphics/components/FreeCameraComponent.h"
+#include "../graphics/components/MeshComponent.h"
 #include "../physics/components/SectorComponent.h"
 #include "../physics/components/GravityAffectedComponent.h"
 #include "../physics/components/RigidBodyComponent.h"
@@ -56,12 +58,47 @@ void PlayerSystem::Shutdown() {
 void PlayerSystem::ProcessPlayerInput(float deltaTime, entt::registry& registry) {
     InputManager::GetInstance().Update();
 
+    // 如果自由相机激活，则屏蔽玩家输入，避免干涉玩家实体
+    bool freeCameraActive = false;
+    {
+        auto freeCamView = registry.view<FreeCameraComponent>();
+        for (auto entity : freeCamView) {
+            auto& freeCam = freeCamView.get<FreeCameraComponent>(entity);
+            if (freeCam.isActive) {
+                freeCameraActive = true;
+                break;
+            }
+        }
+    }
+
     // 处理角色控制器输入
     auto view = registry.view<CharacterControllerComponent, PlayerInputComponent>();
     for (auto entity : view) {
         auto& character = view.get<CharacterControllerComponent>(entity);
         auto& playerInput = view.get<PlayerInputComponent>(entity);
-        
+
+        // 当自由相机激活时，清空玩家输入，保持玩家静止
+        if (freeCameraActive) {
+            playerInput = {};
+            character.forwardInput = 0.0f;
+            character.rightInput = 0.0f;
+            character.wantsToJump = false;
+            character.wantsToRun = false;
+            continue;
+        }
+
+        // 当玩家正在驾驶飞船时，暂停角色输入，防止在地面乱动
+        if (auto* interaction = registry.try_get<PlayerSpacecraftInteractionComponent>(entity)) {
+            if (interaction->isPiloting) {
+                playerInput = {};
+                character.forwardInput = 0.0f;
+                character.rightInput = 0.0f;
+                character.wantsToJump = false;
+                character.wantsToRun = false;
+                continue;
+            }
+        }
+
         playerInput = InputManager::GetInstance().GetPlayerInput();
         
         // 映射输入
@@ -178,8 +215,22 @@ void PlayerSystem::UpdateSurfaceWalking(float deltaTime, entt::registry& registr
         auto& gravity = view.get<GravityAffectedComponent>(entity);
         auto& inSector = view.get<InSectorComponent>(entity);
         auto& transform = view.get<TransformComponent>(entity);
-        
+
+        // 正在驾驶飞船时，不更新地面行走逻辑
+        if (auto* interaction = registry.try_get<PlayerSpacecraftInteractionComponent>(entity)) {
+            if (interaction->isPiloting) {
+                continue;
+            }
+        }
+
         if (!character.pxController) continue;
+        
+        // Debug: 第一帧详细检查
+        static bool firstFrame = true;
+        static int frameCount = 0;
+        frameCount++;
+        
+
         
         // 1. 更新局部坐标系（基于重力方向）
         UpdateLocalCoordinateFrame(character.localUp, character.localForward, 
@@ -261,11 +312,14 @@ void PlayerSystem::UpdateSurfaceWalking(float deltaTime, entt::registry& registr
         physx::PxVec3 displacement(moveDelta.x, moveDelta.y, moveDelta.z);
         physx::PxControllerFilters filters;
         physx::PxControllerCollisionFlags collisionFlags = character.pxController->move(displacement, 0.01f, deltaTime, filters);
+
         
         // 检测碰撞标志，更新grounded状态
         character.wasGrounded = character.isGrounded;
         character.isGrounded = (collisionFlags & physx::PxControllerCollisionFlag::eCOLLISION_DOWN) != physx::PxControllerCollisionFlags(0);
         
+        // Debug: 每60帧打印碰撞状态
+
         // 如果检测到向下碰撞且在空中，清除垂直速度（着陆）
         if (character.isGrounded && !character.wasGrounded) {
             // 将速度投影到切平面，移除垂直分量
@@ -276,28 +330,36 @@ void PlayerSystem::UpdateSurfaceWalking(float deltaTime, entt::registry& registr
             }
         }
         
-        // 9. 获取新位置并更新Transform和InSectorComponent
+        // 9. 获取新位置并更新 InSectorComponent
+        // 【重要】只更新 inSector.localPosition，不要写 transform.position！
+        // transform.position 会由 SectorPhysicsSystem 根据 localPosition 自动计算世界坐标
         pxPos = character.pxController->getPosition();
-        transform.position = { (float)pxPos.x, (float)pxPos.y, (float)pxPos.z };
+        inSector.localPosition = { (float)pxPos.x, (float)pxPos.y, (float)pxPos.z };
         
-        // 重要：同步到 InSectorComponent，这样重力计算才能获取正确的位置
-        inSector.localPosition = transform.position;
+        // 10. 计算角色旋转（使角色"站立"朝向localUp，面向前进方向）
+        // charUp = 重力反方向（脚朝向地面）
+        // charForward = 玩家视角前方（投影到切平面）
+        XMVECTOR charUp = XMVector3Normalize(up);
+        XMVECTOR charForward = XMVector3Normalize(rotatedForward);
         
-        // 10. 计算角色旋转（使角色"站立"朝向localUp）
-        XMVECTOR charUp = up;
-        XMVECTOR charForward = rotatedForward;
+        // 确保 forward 和 up 正交
         XMVECTOR charRight = XMVector3Normalize(XMVector3Cross(charUp, charForward));
         charForward = XMVector3Normalize(XMVector3Cross(charRight, charUp));
         
-        XMMATRIX rotMatrix = XMMatrixIdentity();
-        rotMatrix.r[0] = charRight;
-        rotMatrix.r[1] = charUp;
-        rotMatrix.r[2] = charForward;
+        // 构建正交旋转矩阵（列向量：X=right, Y=up, Z=forward）
+        // DirectXMath 使用行主序，所以 r[0] 是第一行
+        XMMATRIX rotMatrix;
+        rotMatrix.r[0] = XMVectorSetW(charRight, 0.0f);
+        rotMatrix.r[1] = XMVectorSetW(charUp, 0.0f);
+        rotMatrix.r[2] = XMVectorSetW(charForward, 0.0f);
+        rotMatrix.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
         
         XMVECTOR quat = XMQuaternionRotationMatrix(rotMatrix);
-        XMFLOAT4 quatF;
-        XMStoreFloat4(&quatF, quat);
-        transform.rotation = quatF;
+        
+        // 【重要】更新 inSector.localRotation 而不是 transform.rotation
+        // 因为 SectorPhysicsSystem 会用 localRotation 来计算世界 rotation
+        XMStoreFloat4(&inSector.localRotation, quat);
+
     }
 }
 
@@ -309,6 +371,13 @@ void PlayerSystem::UpdatePlayerCamera(float deltaTime, entt::registry& registry)
         auto& character = playerView.get<CharacterControllerComponent>(playerEntity);
         auto& playerTransform = playerView.get<TransformComponent>(playerEntity);
         auto& inSector = playerView.get<InSectorComponent>(playerEntity);
+
+        // 驾驶飞船时，玩家相机由 CameraModeSystem/SpacecraftDrivingSystem 管理
+        if (auto* interaction = registry.try_get<PlayerSpacecraftInteractionComponent>(playerEntity)) {
+            if (interaction->isPiloting) {
+                continue;
+            }
+        }
         
         // 获取扇区世界位置
         XMFLOAT3 sectorWorldPos = { 0.0f, 0.0f, 0.0f };
@@ -346,7 +415,10 @@ void PlayerSystem::UpdatePlayerCamera(float deltaTime, entt::registry& registry)
             // 如果扇区有旋转，localUp 也需要旋转到世界坐标系
             XMVECTOR worldUp = XMVector3Rotate(localUp, sectorRotQuat);
             
-            // 相机在玩家头顶位置
+            // 相机在玩家眼睛位置
+            // playerWorldPos 是胶囊中心位置，但模型原点在脚底
+            // 所以 playerWorldPos 实际上是模型脚底位置
+            // cameraOffset.y 是眼睛距离脚底的高度，直接使用
             XMVECTOR camPos = XMVectorAdd(playerWorldPos, XMVectorScale(worldUp, character.cameraOffset.y));
             XMStoreFloat3(&camTransform.position, camPos);
             XMStoreFloat3(&camera.position, camPos);
@@ -425,8 +497,61 @@ void PlayerSystem::UpdateSpacecraftInteraction(float deltaTime, entt::registry& 
             if (fKeyPressed && !fKeyWasPressed && fKeyCooldown <= 0.0f && interaction.currentSpacecraft != entt::null) {
                 std::cout << "[PlayerSystem] F pressed - Exiting spacecraft!" << std::endl;
                 
-                auto& spacecraft = registry.get<SpacecraftComponent>(interaction.currentSpacecraft);
-                
+                entt::entity spacecraftEntity = interaction.currentSpacecraft;
+                auto& spacecraft = registry.get<SpacecraftComponent>(spacecraftEntity);
+
+                // 计算下船后玩家在扇区内的新位置（基于飞船局部坐标与 exitOffset）
+                auto* spacecraftInSector = registry.try_get<InSectorComponent>(spacecraftEntity);
+                auto* playerInSector = registry.try_get<InSectorComponent>(playerEntity);
+                auto* character = registry.try_get<CharacterControllerComponent>(playerEntity);
+                if (spacecraftInSector && playerInSector) {
+                    XMVECTOR scPos = XMLoadFloat3(&spacecraftInSector->localPosition);
+                    XMVECTOR scRotQuat = XMLoadFloat4(&spacecraftInSector->localRotation);
+                    XMMATRIX scRot = XMMatrixRotationQuaternion(scRotQuat);
+
+                    // 飞船局部坐标轴（与 SpacecraftDrivingSystem 保持一致）
+                    XMVECTOR fwd = XMVector3TransformNormal(XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), scRot);
+                    XMVECTOR right = XMVector3TransformNormal(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), scRot);
+                    XMVECTOR up = XMVector3TransformNormal(XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), scRot);
+
+                    XMVECTOR offset = XMVectorZero();
+                    offset = XMVectorAdd(offset, XMVectorScale(right, spacecraft.exitOffset.x));
+                    offset = XMVectorAdd(offset, XMVectorScale(up, spacecraft.exitOffset.y));
+                    offset = XMVectorAdd(offset, XMVectorScale(fwd, spacecraft.exitOffset.z));
+
+                    XMVECTOR newLocalPos = XMVectorAdd(scPos, offset);
+                    XMStoreFloat3(&playerInSector->localPosition, newLocalPos);
+                    playerInSector->sector = spacecraftInSector->sector;
+                    playerInSector->isInitialized = true;
+                    playerInSector->needsSync = true;
+
+                    // 同步 PhysX 胶囊控制器位置并清空速度
+                    if (character && character->pxController) {
+                        physx::PxExtendedVec3 newPxPos(
+                            playerInSector->localPosition.x,
+                            playerInSector->localPosition.y,
+                            playerInSector->localPosition.z
+                        );
+                        character->pxController->setPosition(newPxPos);
+                        character->velocity = { 0.0f, 0.0f, 0.0f };
+                        character->isGrounded = false;
+                        character->wasGrounded = false;
+                    }
+                }
+
+                // 重新显示玩家模型（主实体及其子网格）
+                if (auto* mesh = registry.try_get<MeshComponent>(playerEntity)) {
+                    mesh->isVisible = true;
+                }
+                auto childView = registry.view<ChildEntityComponent, MeshComponent>();
+                for (auto childEntity : childView) {
+                    auto& child = childView.get<ChildEntityComponent>(childEntity);
+                    if (child.parent == playerEntity) {
+                        auto& childMesh = childView.get<MeshComponent>(childEntity);
+                        childMesh.isVisible = true;
+                    }
+                }
+
                 // 重置飞船状态
                 spacecraft.currentState = SpacecraftComponent::State::IDLE;
                 spacecraft.pilot = entt::null;
@@ -491,6 +616,29 @@ void PlayerSystem::UpdateSpacecraftInteraction(float deltaTime, entt::registry& 
                 auto& spacecraft = registry.get<SpacecraftComponent>(interaction.nearestSpacecraft);
                 spacecraft.pilot = playerEntity;
                 spacecraft.currentState = SpacecraftComponent::State::PILOTED;
+
+                 // 进入飞船时，隐藏玩家模型（主实体及其子网格）
+                 if (auto* mesh = registry.try_get<MeshComponent>(playerEntity)) {
+                     mesh->isVisible = false;
+                 }
+                 auto childView = registry.view<ChildEntityComponent, MeshComponent>();
+                 for (auto childEntity : childView) {
+                     auto& child = childView.get<ChildEntityComponent>(childEntity);
+                     if (child.parent == playerEntity) {
+                         auto& childMesh = childView.get<MeshComponent>(childEntity);
+                         childMesh.isVisible = false;
+                     }
+                 }
+                
+                // 【关键】唤醒 PhysX actor，确保物理正常工作
+                auto* rigidBody = registry.try_get<RigidBodyComponent>(interaction.nearestSpacecraft);
+                if (rigidBody && rigidBody->physxActor) {
+                    auto* dynamicActor = rigidBody->physxActor->is<physx::PxRigidDynamic>();
+                    if (dynamicActor) {
+                        dynamicActor->wakeUp();
+                        std::cout << "[PlayerSystem] Spacecraft PhysX actor woken up!" << std::endl;
+                    }
+                }
                 
                 fKeyCooldown = KEY_COOLDOWN_TIME;
             }

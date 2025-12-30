@@ -90,33 +90,27 @@ float stars(float3 dir, float density, float brightness)
     // 使用多层网格来生成不同大小的星星
     float stars = 0.0;
     
-    // 层1：密集小星星
-    float3 p1 = dir * 200.0;
-    float n1 = hash(floor(p1));
-    float d1 = length(frac(p1) - 0.5);
-    if (n1 > (1.0 - density * 0.3) && d1 < 0.1)
-    {
-        stars += brightness * 0.5 * smoothstep(0.1, 0.0, d1);
-    }
+    // 层1：密集小星星（移除，避免频闪）
+    // 已注释掉
     
-    // 层2：中等星星
+    // 层2：中等星星（稳定，不闪烁）
     float3 p2 = dir * 100.0;
     float n2 = hash(floor(p2));
     float d2 = length(frac(p2) - 0.5);
-    if (n2 > (1.0 - density * 0.15) && d2 < 0.15)
+    if (n2 > (1.0 - density * 0.15) && d2 < 0.12)  // 减小阈值
     {
-        stars += brightness * 0.8 * smoothstep(0.15, 0.0, d2);
+        stars += brightness * 0.8 * smoothstep(0.12, 0.0, d2);
     }
     
-    // 层3：大亮星星
+    // 层3：大亮星星（缓慢闪烁）
     float3 p3 = dir * 50.0;
     float n3 = hash(floor(p3));
     float d3 = length(frac(p3) - 0.5);
-    if (n3 > (1.0 - density * 0.05) && d3 < 0.2)
+    if (n3 > (1.0 - density * 0.05) && d3 < 0.15)  // 从0.2减小到0.15，让大星星更小
     {
-        // 添加闪烁效果
-        float twinkle = 0.7 + 0.3 * sin(time * 2.0 + n3 * 100.0);
-        stars += brightness * twinkle * smoothstep(0.2, 0.0, d3);
+        // 添加非常慢的闪烁效果（周期约60秒）
+        float twinkle = 0.85 + 0.15 * sin(time * 0.05 + n3 * 100.0);  // 频率从2.0降低到0.05
+        stars += brightness * twinkle * smoothstep(0.15, 0.0, d3);
     }
     
     return stars;
@@ -137,7 +131,7 @@ float milkyWay(float3 dir)
     // 添加噪声纹理
     float n = noise(dir * 10.0) * 0.5 + noise(dir * 20.0) * 0.3 + noise(dir * 40.0) * 0.2;
     
-    return core * n * 0.3;
+    return core * n * 0.15;  // 从0.3降低到0.15，减淡银河
 }
 
 // ============================================
@@ -147,22 +141,20 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
 {
     float3 dir = normalize(input.texCoord);
     
-    // 深空背景色（非常暗的蓝色）
-    float3 spaceColor = float3(0.01, 0.01, 0.02);
+    // 深空背景色（更暗，接近纯黑）
+    float3 spaceColor = float3(0.0, 0.0, 0.0);
     
-    // 添加星星
-    float starField = stars(dir, 0.8, 1.5);
+    // 添加星星（增大亮度）
+    float starField = stars(dir, 0.8, 3.0);  // 从2.2增加到3.0
     
-    // 添加银河
+    // 添加银河（减淡颜色）
     float milky = milkyWay(dir);
-    float3 milkyColor = float3(0.6, 0.5, 0.8) * milky;
+    float3 milkyColor = float3(0.3, 0.25, 0.4) * milky;  // 从(0.6, 0.5, 0.8)减淡到0.5倍
     
     // 最终颜色
     float3 finalColor = spaceColor + starField + milkyColor;
     
-    // 轻微的大气散射效果（地平线附近略亮）
-    float horizon = 1.0 - abs(dir.y);
-    finalColor += float3(0.02, 0.01, 0.03) * horizon * horizon;
+    // 移除地平线散射效果，保持纯粹的太空背景
     
     return float4(finalColor, 1.0);
 }

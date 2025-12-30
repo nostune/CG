@@ -13,6 +13,7 @@ class PhysicsSystem;
 class SectorPhysicsSystem;
 class OrbitSystem;
 class PlayerSystem;
+class SpacecraftDrivingSystem;
 class FreeCameraSystem;
 class CameraModeSystem;
 class AudioSystem;
@@ -64,6 +65,7 @@ private:
     std::shared_ptr<SectorPhysicsSystem> m_SectorPhysicsSystem;
     std::shared_ptr<OrbitSystem> m_OrbitSystem;
     std::shared_ptr<PlayerSystem> m_PlayerSystem;
+    std::shared_ptr<SpacecraftDrivingSystem> m_SpacecraftDrivingSystem;
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
     std::shared_ptr<AudioSystem> m_AudioSystem;

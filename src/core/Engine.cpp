@@ -10,6 +10,7 @@
 // #include "../physics/ApplyGravitySystem.h"
 // #include "../physics/SectorSystem.h"
 #include "../gameplay/PlayerSystem.h"
+#include "../gameplay/SpacecraftDrivingSystem.h"
 // #include "../gameplay/PlayerAlignmentSystem.h"
 // #include "../gameplay/OrbitSystem.h"
 // #include "../gameplay/SpacecraftControlSystem.h"
@@ -80,6 +81,10 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
 
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    // 飞船驾驶系统（6DOF 物理控制）
+    m_SpacecraftDrivingSystem = AddSystem<SpacecraftDrivingSystem>();
+    m_SpacecraftDrivingSystem->Initialize(m_SceneManager->GetActiveScene());
 
     // 相机模式系统（处理玩家视角/自由视角切换）
     m_CameraModeSystem = AddSystem<CameraModeSystem>();

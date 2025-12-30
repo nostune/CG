@@ -6,6 +6,7 @@
 #include "../gameplay/components/CharacterControllerComponent.h"
 #include "../gameplay/components/SpacecraftComponent.h"
 #include "../physics/components/GravityAffectedComponent.h"
+#include "../physics/components/SectorComponent.h"
 #include "../scene/components/TransformComponent.h"
 #include "../input/InputManager.h"
 #include "../core/DebugManager.h"
@@ -29,10 +30,8 @@ void CameraModeSystem::Update(float deltaTime, entt::registry& registry) {
     CheckSpacecraftPilotingState(registry);
     CheckModeToggle(registry);
     
-    // 如果在飞船模式，更新飞船相机
-    if (m_CurrentMode == CameraMode::Spacecraft) {
-        UpdateSpacecraftCamera(registry);
-    }
+    // 注意：飞船模式的相机由 SpacecraftDrivingSystem::UpdateSpacecraftCamera 负责
+    // 这里不再调用 UpdateSpacecraftCamera，避免冲突
 }
 
 // 检测玩家是否正在驾驶飞船，自动切换相机模式
@@ -180,7 +179,7 @@ void CameraModeSystem::CreateFreeCameraEntity(entt::registry& registry) {
     camera.fov = 75.0f;
     camera.aspectRatio = 16.0f / 9.0f;
     camera.nearPlane = 0.1f;
-    camera.farPlane = 1000.0f;
+    camera.farPlane = 50000.0f;  // 1百万单位，足够覆盖整个太阳系
     camera.yaw = playerYaw;
     camera.pitch = playerPitch;
     
@@ -241,52 +240,58 @@ void CameraModeSystem::SwitchToSpacecraftMode(entt::registry& registry, entt::en
         if (freeCameraComp) freeCameraComp->isActive = false;
     }
     
-    // 获取飞船并设置相机
+    // 获取飞船的 InSectorComponent 来计算正确的相机位置
     auto* spacecraftComp = registry.try_get<SpacecraftComponent>(spacecraft);
-    auto* spacecraftTransform = registry.try_get<TransformComponent>(spacecraft);
+    auto* inSector = registry.try_get<InSectorComponent>(spacecraft);
     
-    if (spacecraftComp && spacecraftTransform) {
-        // 验证四元数有效性
-        auto& rot = spacecraftTransform->rotation;
-        float quatLengthSq = rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w;
-        
-        DirectX::XMVECTOR spacecraftRot;
-        if (quatLengthSq < 0.001f) {
-            spacecraftRot = DirectX::XMQuaternionIdentity();
-        } else {
-            spacecraftRot = DirectX::XMVector4Normalize(DirectX::XMLoadFloat4(&rot));
-        }
-        
-        // 查找玩家相机并更新其位置到飞船位置
-        auto playerCameraView = registry.view<PlayerComponent, CameraComponent>();
-        for (auto playerEntity : playerCameraView) {
-            auto* camera = registry.try_get<CameraComponent>(playerEntity);
-            if (!camera) continue;
+    if (spacecraftComp && inSector && inSector->sector != entt::null) {
+        auto* sector = registry.try_get<SectorComponent>(inSector->sector);
+        if (sector) {
+            // 【重要】飞船模型坐标系（此模型上下颠倒，已在初始化时修正）
+            // 模型前方 = +Z, 模型上方 = -Y（绕Z旋转180度后）
+            DirectX::XMVECTOR localQuat = DirectX::XMLoadFloat4(&inSector->localRotation);
+            DirectX::XMMATRIX rotMatrix = DirectX::XMMatrixRotationQuaternion(localQuat);
             
-            // 计算飞船内部相机位置
-            DirectX::XMVECTOR spacecraftPos = DirectX::XMLoadFloat3(&spacecraftTransform->position);
-            DirectX::XMVECTOR cameraOffset = DirectX::XMLoadFloat3(&spacecraftComp->cameraOffset);
+            DirectX::XMVECTOR modelForward = DirectX::XMVector3TransformNormal(
+                DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), rotMatrix);
+            DirectX::XMVECTOR modelUp = DirectX::XMVector3TransformNormal(
+                DirectX::XMVectorSet(0.0f, -1.0f, 0.0f, 0.0f), rotMatrix);
             
-            // 旋转偏移
-            cameraOffset = DirectX::XMVector3Rotate(cameraOffset, spacecraftRot);
-            DirectX::XMVECTOR cameraPos = DirectX::XMVectorAdd(spacecraftPos, cameraOffset);
+            // 转换到世界坐标系
+            DirectX::XMVECTOR sectorRot = DirectX::XMLoadFloat4(&sector->worldRotation);
+            DirectX::XMVECTOR worldForward = DirectX::XMVector3Rotate(modelForward, sectorRot);
+            DirectX::XMVECTOR worldUp = DirectX::XMVector3Rotate(modelUp, sectorRot);
             
-            DirectX::XMStoreFloat3(&camera->position, cameraPos);
+            // 计算飞船世界位置
+            DirectX::XMVECTOR localPos = DirectX::XMLoadFloat3(&inSector->localPosition);
+            DirectX::XMVECTOR rotatedLocalPos = DirectX::XMVector3Rotate(localPos, sectorRot);
+            DirectX::XMVECTOR spacecraftWorldPos = DirectX::XMVectorAdd(
+                rotatedLocalPos, DirectX::XMLoadFloat3(&sector->worldPosition));
             
-            // 从飞船 transform 计算相机方向
-            DirectX::XMVECTOR forward = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), spacecraftRot);
-            DirectX::XMVECTOR up = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 1, 0, 0), spacecraftRot);
-            DirectX::XMVECTOR right = DirectX::XMVector3Rotate(DirectX::XMVectorSet(1, 0, 0, 0), spacecraftRot);
+            // 计算相机位置：飞船后上方
+            DirectX::XMVECTOR cameraPos = spacecraftWorldPos;
+            cameraPos = DirectX::XMVectorSubtract(cameraPos, 
+                DirectX::XMVectorScale(worldForward, spacecraftComp->cameraDistance));
+            cameraPos = DirectX::XMVectorAdd(cameraPos, 
+                DirectX::XMVectorScale(worldUp, spacecraftComp->cameraHeight));
             
-            DirectX::XMVECTOR targetPos = DirectX::XMVectorAdd(cameraPos, forward);
-            DirectX::XMStoreFloat3(&camera->target, targetPos);
-            DirectX::XMStoreFloat3(&camera->up, up);
-            DirectX::XMStoreFloat3(&camera->localUp, up);
-            DirectX::XMStoreFloat3(&camera->localForward, forward);
-            DirectX::XMStoreFloat3(&camera->localRight, right);
+            // 计算注视点
+            DirectX::XMVECTOR lookTarget = DirectX::XMVectorAdd(
+                spacecraftWorldPos, 
+                DirectX::XMVectorScale(worldForward, spacecraftComp->cameraLookAheadDistance));
             
-            camera->isActive = true;
-            break;
+            // 更新玩家相机
+            auto playerCameraView = registry.view<PlayerComponent, CameraComponent>();
+            for (auto playerEntity : playerCameraView) {
+                auto* camera = registry.try_get<CameraComponent>(playerEntity);
+                if (!camera) continue;
+                
+                DirectX::XMStoreFloat3(&camera->position, cameraPos);
+                DirectX::XMStoreFloat3(&camera->target, lookTarget);
+                DirectX::XMStoreFloat3(&camera->up, worldUp);
+                camera->isActive = true;
+                break;
+            }
         }
     }
     

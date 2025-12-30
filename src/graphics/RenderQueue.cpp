@@ -1,6 +1,7 @@
 #include "RenderQueue.h"
 #include "components/MeshComponent.h"
 #include "../scene/components/TransformComponent.h"
+#include "../scene/components/ChildEntityComponent.h"
 #include "../core/DebugManager.h"
 #include "resources/Material.h"
 #include "resources/Mesh.h"
@@ -51,9 +52,28 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
     XMVECTOR camPos = XMLoadFloat3(&cameraPos);
     
     auto view = registry.view<components::MeshComponent, TransformComponent>();
+    
+    static int renderDebugFrame = 0;
+    renderDebugFrame++;
+    
     for (auto entity : view) {
         auto& meshComp = view.get<components::MeshComponent>(entity);
         auto& transformComp = view.get<TransformComponent>(entity);
+        
+        // For child entities, use parent's transform instead
+        TransformComponent* effectiveTransform = &transformComp;
+        bool isChildEntity = false;
+        if (auto* childComp = registry.try_get<components::ChildEntityComponent>(entity)) {
+            if (childComp->parent != entt::null && registry.valid(childComp->parent)) {
+                if (auto* parentTransform = registry.try_get<TransformComponent>(childComp->parent)) {
+                    effectiveTransform = parentTransform;
+                    isChildEntity = true;
+                }
+            }
+        }
+        
+        // Debug: 打印渲染时使用的 rotation（只对前几个实体，每60帧一次）
+        
         
         // 跳过无效/不可见Mesh
         if (!meshComp.mesh || !meshComp.mesh->vertexBuffer || !meshComp.isVisible) {
@@ -147,23 +167,23 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         
         // === 变换矩阵 ===
         XMMATRIX translation = XMMatrixTranslation(
-            transformComp.position.x,
-            transformComp.position.y,
-            transformComp.position.z
+            effectiveTransform->position.x,
+            effectiveTransform->position.y,
+            effectiveTransform->position.z
         );
-        XMMATRIX rotation = XMMatrixRotationQuaternion(XMLoadFloat4(&transformComp.rotation));
+        XMMATRIX rotation = XMMatrixRotationQuaternion(XMLoadFloat4(&effectiveTransform->rotation));
         XMMATRIX scale = XMMatrixScaling(
-            transformComp.scale.x,
-            transformComp.scale.y,
-            transformComp.scale.z
+            effectiveTransform->scale.x,
+            effectiveTransform->scale.y,
+            effectiveTransform->scale.z
         );
         batch.worldMatrix = scale * rotation * translation;
         
         // === 计算光照方向 ===
         // lightDir = normalize(sunPosition - objectPosition)
-        float dx = sunPosition.x - transformComp.position.x;
-        float dy = sunPosition.y - transformComp.position.y;
-        float dz = sunPosition.z - transformComp.position.z;
+        float dx = sunPosition.x - effectiveTransform->position.x;
+        float dy = sunPosition.y - effectiveTransform->position.y;
+        float dz = sunPosition.z - effectiveTransform->position.z;
         float dist = sqrtf(dx*dx + dy*dy + dz*dz);
         
         if (dist > 1.0f) {
@@ -176,7 +196,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         batch.isSphere = true;
         
         // === 计算深度 ===
-        XMVECTOR objPos = XMLoadFloat3(&transformComp.position);
+        XMVECTOR objPos = XMLoadFloat3(&effectiveTransform->position);
         XMVECTOR delta = XMVectorSubtract(objPos, camPos);
         float distanceSquared = XMVectorGetX(XMVector3LengthSq(delta));
         uint16_t depth = static_cast<uint16_t>((std::min)(distanceSquared, 65535.0f));
@@ -188,6 +208,129 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         batch.CalculateSortKey(shaderID, matID, depth);
         
         m_Batches.push_back(batch);
+    }
+    
+    // === 处理 MultiMeshComponent（多材质模型） ===
+    auto multiView = registry.view<components::MultiMeshComponent, TransformComponent>();
+    for (auto entity : multiView) {
+        auto& multiMesh = multiView.get<components::MultiMeshComponent>(entity);
+        auto& transformComp = multiView.get<TransformComponent>(entity);
+        
+        if (!multiMesh.isVisible) continue;
+        
+        // 为每个子 mesh 创建 batch
+        for (size_t i = 0; i < multiMesh.meshes.size(); i++) {
+            auto& mesh = multiMesh.meshes[i];
+            auto& material = (i < multiMesh.materials.size()) ? multiMesh.materials[i] : nullptr;
+            
+            if (!mesh || !mesh->vertexBuffer) continue;
+            
+            RenderBatch batch;
+            
+            // === GPU资源 ===
+            batch.vertexBuffer = static_cast<ID3D11Buffer*>(mesh->vertexBuffer);
+            batch.indexBuffer = static_cast<ID3D11Buffer*>(mesh->indexBuffer);
+            batch.indexCount = mesh->GetIndexCount();
+            batch.vertexStride = sizeof(resources::Vertex);
+            batch.vertexOffset = 0;
+            
+            // 获取D3D设备
+            if (!g_CachedDevice && batch.vertexBuffer) {
+                batch.vertexBuffer->GetDevice(&g_CachedDevice);
+            }
+            
+            // === 纹理和 Shader ===
+            resources::Shader* shaderToUse = nullptr;
+            ID3D11ShaderResourceView* albedoSRV = nullptr;
+            ID3D11ShaderResourceView* normalSRV = nullptr;
+            ID3D11ShaderResourceView* metallicSRV = nullptr;
+            ID3D11ShaderResourceView* roughnessSRV = nullptr;
+            ID3D11ShaderResourceView* emissiveSRV = nullptr;
+            
+            if (material) {
+                albedoSRV = static_cast<ID3D11ShaderResourceView*>(material->albedoTextureSRV);
+                normalSRV = static_cast<ID3D11ShaderResourceView*>(material->normalTextureSRV);
+                metallicSRV = static_cast<ID3D11ShaderResourceView*>(material->metallicTextureSRV);
+                roughnessSRV = static_cast<ID3D11ShaderResourceView*>(material->roughnessTextureSRV);
+                emissiveSRV = static_cast<ID3D11ShaderResourceView*>(material->emissiveTextureSRV);
+                
+                // Fallback to old shaderProgram
+                if (!albedoSRV && material->shaderProgram) {
+                    albedoSRV = static_cast<ID3D11ShaderResourceView*>(material->shaderProgram);
+                }
+                
+                if (g_CachedDevice) {
+                    if (albedoSRV || normalSRV || metallicSRV || roughnessSRV) {
+                        shaderToUse = GetOrLoadShader("textured.vs", "textured.ps", g_CachedDevice);
+                    } else {
+                        shaderToUse = GetOrLoadShader("basic.vs", "basic.ps", g_CachedDevice);
+                    }
+                }
+            }
+            
+            if (!shaderToUse && g_CachedDevice) {
+                shaderToUse = GetOrLoadShader("basic.vs", "basic.ps", g_CachedDevice);
+            }
+            
+            if (!shaderToUse) continue;
+            
+            batch.vertexShader = shaderToUse->GetVertexShader();
+            batch.pixelShader = shaderToUse->GetPixelShader();
+            batch.inputLayout = shaderToUse->GetInputLayout();
+            batch.albedoTexture = albedoSRV;
+            batch.normalTexture = normalSRV;
+            batch.metallicTexture = metallicSRV;
+            batch.roughnessTexture = roughnessSRV;
+            batch.emissiveTexture = emissiveSRV;
+            batch.material = material.get();
+            
+            // === 变换矩阵 ===
+            XMMATRIX translation = XMMatrixTranslation(
+                transformComp.position.x,
+                transformComp.position.y,
+                transformComp.position.z
+            );
+            XMMATRIX rotation = XMMatrixRotationQuaternion(XMLoadFloat4(&transformComp.rotation));
+            XMMATRIX scale = XMMatrixScaling(
+                transformComp.scale.x,
+                transformComp.scale.y,
+                transformComp.scale.z
+            );
+            batch.worldMatrix = scale * rotation * translation;
+            
+            // === 光照方向 ===
+            float dx = sunPosition.x - transformComp.position.x;
+            float dy = sunPosition.y - transformComp.position.y;
+            float dz = sunPosition.z - transformComp.position.z;
+            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+            if (dist > 1.0f) {
+                batch.lightDir = { dx / dist, dy / dist, dz / dist };
+            } else {
+                batch.lightDir = { 0.0f, 1.0f, 0.0f };
+            }
+            batch.isSphere = true;
+            
+            // === 深度和排序键 ===
+            XMVECTOR objPos = XMLoadFloat3(&transformComp.position);
+            XMVECTOR delta = XMVectorSubtract(objPos, camPos);
+            float distanceSquared = XMVectorGetX(XMVector3LengthSq(delta));
+            uint16_t depth = static_cast<uint16_t>((std::min)(distanceSquared, 65535.0f));
+            
+            batch.renderPass = (material && material->isTransparent) ? 1 : 0;
+            
+            if (batch.vertexShader && shaderIDs.find(batch.vertexShader) == shaderIDs.end()) {
+                shaderIDs[batch.vertexShader] = nextShaderID++;
+            }
+            if (batch.albedoTexture && materialIDs.find(batch.albedoTexture) == materialIDs.end()) {
+                materialIDs[batch.albedoTexture] = nextMaterialID++;
+            }
+            
+            uint8_t shaderID = batch.vertexShader ? shaderIDs[batch.vertexShader] : 0;
+            uint8_t matID = batch.albedoTexture ? materialIDs[batch.albedoTexture] : 0;
+            batch.CalculateSortKey(shaderID, matID, depth);
+            
+            m_Batches.push_back(batch);
+        }
     }
     
     m_Stats.totalBatches = static_cast<uint32_t>(m_Batches.size());
@@ -215,11 +358,11 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
     static ID3D11SamplerState* s_defaultSampler = nullptr;
     if (!s_defaultSampler && g_CachedDevice) {
         D3D11_SAMPLER_DESC samplerDesc = {};
-        samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;  // 使用各向异性过滤以获得更好的纹理质量
         samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
         samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
         samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-        samplerDesc.MaxAnisotropy = 1;
+        samplerDesc.MaxAnisotropy = 16;  // 增加各向异性过滤级别
         samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
         samplerDesc.MinLOD = 0;
         samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
@@ -340,19 +483,7 @@ void RenderQueue::Execute(ID3D11DeviceContext* context, ID3D11Buffer* perObjectC
             // 调试输出（只输出前5个batch）
             static bool debugDone = false;
             static int batchCount = 0;
-            if (!debugDone) {
-                printf("=== Batch #%d ===\n", batchCount);
-                printf("  indexCount = %u\n", batch.indexCount);
-                printf("  lightDir   = (%.3f, %.3f, %.3f)\n", 
-                       objData.lightDir.x, objData.lightDir.y, objData.lightDir.z);
-                printf("============================\n");
-                
-                batchCount++;
-                if (batchCount >= 5) {
-                    debugDone = true;
-                    printf("\n[Debug] First 5 batches shown.\n\n");
-                }
-            }
+            
             
             D3D11_MAPPED_SUBRESOURCE mappedResource;
             if (SUCCEEDED(context->Map(perObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {

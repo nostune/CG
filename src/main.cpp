@@ -14,6 +14,8 @@
 #include "ui/UISystem.h"
 #include "scene/Scene.h"
 #include "scene/SceneAssetLoader.h"
+#include "scene/SolarSystemConfig.h"
+#include "scene/SolarSystemBuilder.h"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 
@@ -165,11 +167,10 @@ int main(int argc, char* argv[]) {
         auto* device = renderBackend->GetDevice();
         
         // ========================================
-        // 【完整测试场景】
-        // 创建星球（带模型）、玩家、飞船
-        // 使用 SectorPhysicsSystem 管理扇区内物理
+        // 【微缩太阳系场景】
+        // 使用 SolarSystemBuilder 创建完整太阳系
         // ========================================
-        std::cout << "\n=== Creating Full Test Scene ===" << std::endl;
+        std::cout << "\n=== Creating Miniature Solar System ===" << std::endl;
         
         auto* pxPhysics = physxManager.GetPhysics();
         auto* pxScene = physxManager.GetScene();
@@ -178,97 +179,74 @@ int main(int argc, char* argv[]) {
         pxScene->setGravity(physx::PxVec3(0.0f, 0.0f, 0.0f));
         std::cout << "[Scene] Global gravity disabled (managed by SectorPhysicsSystem)" << std::endl;
         
-        const float PLANET_RADIUS = 64.0f;
-        const float SURFACE_GRAVITY = 9.8f;
-        
-        // ========================================
-        // 1. 创建星球实体（扇区 + 重力源 + PhysX 地面 + 模型）
-        // 注：planet_earth.obj 是单位球（半径1），需要缩放到64米
-        // ========================================
-        std::cout << "\n=== Loading Earth Model ===" << std::endl;
-        auto planetEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
-            scene->GetRegistry(), scene, device,
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\planet_earth.obj",
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Texture\\plastered_stone_wall_diff_2k.jpg",
-            DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
-            DirectX::XMFLOAT3(PLANET_RADIUS, PLANET_RADIUS, PLANET_RADIUS)  // 缩放到半径64米
+        // 使用太阳系构建器创建所有天体
+        const std::string ASSETS_BASE = "C:\\Users\\kkakk\\homework\\OuterWilds";
+        auto solarSystem = outer_wilds::SolarSystemBuilder::Build(
+            scene->GetRegistry(), scene, device, ASSETS_BASE
         );
-        std::cout << "[Earth] Entity created: " << (planetEntity != entt::null ? "SUCCESS" : "FAILED") << std::endl;
         
-        if (planetEntity != entt::null) {
-            // SectorComponent（扇区定义）
-            auto& sectorComp = scene->GetRegistry().emplace<outer_wilds::components::SectorComponent>(planetEntity);
-            sectorComp.name = "TestPlanet";
-            sectorComp.worldPosition = { 0.0f, 0.0f, 0.0f };
-            sectorComp.worldRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
-            sectorComp.influenceRadius = PLANET_RADIUS * 3.0f;
-            sectorComp.priority = 0;
-            sectorComp.isActive = true;
-            
-            // OrbitComponent（轨道 - 围绕原点公转）
-            auto& orbitComp = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(planetEntity);
-            orbitComp.orbitCenter = { 0.0f, 0.0f, 0.0f };       // 围绕原点公转
-            orbitComp.orbitRadius = 200.0f;                      // 轨道半径 200m
-            orbitComp.orbitPeriod = 60.0f;                       // 公转周期 60秒
-            orbitComp.orbitAngle = 0.0f;                         // 初始角度
-            orbitComp.orbitNormal = { 0.0f, 1.0f, 0.0f };       // 在XZ平面公转
-            orbitComp.orbitEnabled = true;
-            // 暂时不启用自转，先测试公转
-            orbitComp.rotationEnabled = false;
-            orbitComp.rotationPeriod = 30.0f;                    // 自转周期 30秒
-            
-            // GravitySourceComponent（重力源）
-            auto& gravitySource = scene->GetRegistry().emplace<outer_wilds::components::GravitySourceComponent>(planetEntity);
-            gravitySource.radius = PLANET_RADIUS;
-            gravitySource.surfaceGravity = SURFACE_GRAVITY;
-            gravitySource.atmosphereHeight = PLANET_RADIUS * 0.5f;
-            gravitySource.isActive = true;
-            gravitySource.useRealisticGravity = false;
-            
-            // PhysX 静态球体（星球表面）
-            // [来源: main.cpp 场景初始化]
-            physx::PxMaterial* planetMaterial = pxPhysics->createMaterial(0.5f, 0.5f, 0.3f);
-            physx::PxTransform planetPose(physx::PxVec3(0.0f, 0.0f, 0.0f));
-            physx::PxRigidStatic* planetActor = pxPhysics->createRigidStatic(planetPose);
-            
-            physx::PxShape* planetShape = physx::PxRigidActorExt::createExclusiveShape(
-                *planetActor,
-                physx::PxSphereGeometry(PLANET_RADIUS),
-                *planetMaterial
-            );
-            planetShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
-            planetShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
-            
-            pxScene->addActor(*planetActor);
-            sectorComp.physxGround = planetActor;
-            
-            std::cout << "[Planet] Created with model: radius=" << PLANET_RADIUS 
-                      << "m, gravity=" << SURFACE_GRAVITY << "m/s^2" << std::endl;
-        } else {
-            std::cout << "[Planet] ERROR: Failed to load model!" << std::endl;
+        // 设置太阳实体给渲染系统（用于动态光照）
+        if (solarSystem.sun != entt::null) {
+            engine.GetRenderSystem()->SetSunEntity(solarSystem.sun);
+        }
+        
+        // 获取地球实体（用于玩家出生点）
+        auto planetEntity = solarSystem.earth;
+        const float PLANET_RADIUS = outer_wilds::SolarSystemConfig::EARTH_RADIUS;  // 现在是 64m
+        const float SURFACE_GRAVITY = outer_wilds::SolarSystemConfig::EARTH_GRAVITY;
+        
+        std::cout << "[Main] Using Earth: entity=" << static_cast<uint32_t>(planetEntity) 
+                  << ", PLANET_RADIUS=" << PLANET_RADIUS << std::endl;
+        
+        if (planetEntity == entt::null) {
+            std::cout << "[ERROR] Earth not created, falling back to default spawn" << std::endl;
         }
         
         // ========================================
         // 2. 创建玩家实体（表面行走角色控制器）
         // ========================================
-        const float PLAYER_HEIGHT = PLANET_RADIUS + 3.0f;  // 站在星球表面上方
-        auto playerEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+        // 【重要】玩家位置使用扇区局部坐标系
+        // 局部坐标：相对于地球中心（原点）的位置
+        // 玩家在"北极"上方，即 Y 轴正方向
+        const float PLAYER_LOCAL_HEIGHT = PLANET_RADIUS + 3.0f;  // 站在星球表面上方
+        
+        std::cout << "\n[Main] === Player Setup ===" << std::endl;
+        std::cout << "[Main] PLANET_RADIUS = " << PLANET_RADIUS << std::endl;
+        std::cout << "[Main] PLAYER_LOCAL_HEIGHT = " << PLAYER_LOCAL_HEIGHT << std::endl;
+        
+        // 使用多材质加载器支持 FBX 模型
+        auto playerEntity = outer_wilds::SceneAssetLoader::LoadMultiMaterialModelAsEntities(
             scene->GetRegistry(), scene, device,
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\player.obj",
-            "",
-            DirectX::XMFLOAT3(0.0f, PLAYER_HEIGHT, 0.0f),
-            DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f)
+            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\human\\extracted\\models\\SK_SciFiTrooperManV3.fbx",
+            "",  // 贴图和模型在同一目录
+            DirectX::XMFLOAT3(0.0f, PLAYER_LOCAL_HEIGHT, 0.0f),  // 局部坐标
+            DirectX::XMFLOAT3(0.01f, 0.01f, 0.01f)  // FBX 模型通常需要缩小
         );
         
+        std::cout << "[Main] Player entity ID: " << static_cast<uint32_t>(playerEntity) << std::endl;
+        
         if (playerEntity != entt::null) {
+            // 检查模型加载后的 TransformComponent
+            auto* initTransform = scene->GetRegistry().try_get<outer_wilds::TransformComponent>(playerEntity);
+            if (initTransform) {
+                std::cout << "[Main] Player model loaded at position: (" 
+                          << initTransform->position.x << ", " << initTransform->position.y 
+                          << ", " << initTransform->position.z << ")" << std::endl;
+            }
+            
             // InSectorComponent（标记属于星球扇区）
+            // 【关键】sector 指向地球，localPosition 是相对于地球中心的位置
             auto& inSector = scene->GetRegistry().emplace<outer_wilds::components::InSectorComponent>(playerEntity);
             inSector.sector = planetEntity;
-            inSector.localPosition = { 0.0f, PLAYER_HEIGHT, 0.0f };
+            inSector.localPosition = { 0.0f, PLAYER_LOCAL_HEIGHT, 0.0f };  // 局部坐标
             inSector.localRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
             inSector.isInitialized = true;
             
-            // GravityAffectedComponent（受重力影响）
+            std::cout << "[Main] Player InSectorComponent set: localPosition=(" 
+                      << inSector.localPosition.x << ", " << inSector.localPosition.y 
+                      << ", " << inSector.localPosition.z << "), sector=" 
+                      << static_cast<uint32_t>(inSector.sector) << std::endl;
+                        // GravityAffectedComponent（受重力影响）
             auto& gravityAffected = scene->GetRegistry().emplace<outer_wilds::components::GravityAffectedComponent>(playerEntity);
             gravityAffected.affectedByGravity = true;
             gravityAffected.gravityScale = 1.0f;
@@ -287,12 +265,13 @@ int main(int argc, char* argv[]) {
             // CameraComponent（玩家第一人称相机）
             auto& playerCamera = scene->GetRegistry().emplace<outer_wilds::components::CameraComponent>(playerEntity);
             playerCamera.isActive = true;  // 玩家相机初始激活
-            playerCamera.fov = 75.0f;
+            playerCamera.fov = 60.0f;      // 降低FOV，让脚下地面更容易看到
             playerCamera.aspectRatio = 16.0f / 9.0f;
             playerCamera.nearPlane = 0.1f;
-            playerCamera.farPlane = 2000.0f;
-            playerCamera.position = { 0.0f, PLAYER_HEIGHT + 0.8f, 0.0f };  // 眼睛位置略高于胶囊中心
-            playerCamera.target = { 0.0f, PLAYER_HEIGHT + 0.8f, -1.0f };
+            playerCamera.farPlane = 50000.0f;  // 保持远裁剪面以看到整个太阳系
+            // 相机初始位置（使用局部坐标）
+            playerCamera.position = { 0.0f, PLAYER_LOCAL_HEIGHT + 0.8f, 0.0f };  // 眼睛位置
+            playerCamera.target = { 0.0f, PLAYER_LOCAL_HEIGHT + 0.8f, -1.0f };
             playerCamera.up = { 0.0f, 1.0f, 0.0f };
             playerCamera.moveSpeed = 6.0f;
             playerCamera.lookSensitivity = 0.003f;
@@ -303,7 +282,7 @@ int main(int argc, char* argv[]) {
             auto& character = scene->GetRegistry().emplace<outer_wilds::components::CharacterControllerComponent>(playerEntity);
             character.moveSpeed = 12.0f;   // 步行速度
             character.runSpeed = 24.0f;    // 跑步速度 (按住Shift)
-            character.jumpForce = 10.0f;
+            character.jumpForce = 8.0f;
             character.capsuleRadius = 0.4f;
             character.capsuleHalfHeight = 0.9f;
             character.maxSlopeAngle = 50.0f;
@@ -317,7 +296,13 @@ int main(int argc, char* argv[]) {
             controllerDesc.height = character.capsuleHalfHeight * 2.0f;  // 总高度
             controllerDesc.radius = character.capsuleRadius;
             controllerDesc.material = playerMaterial;
-            controllerDesc.position = physx::PxExtendedVec3(0.0f, PLAYER_HEIGHT, 0.0f);
+            // 【关键】PhysX Controller 使用局部坐标（相对于扇区原点）
+            // 因为地球 PhysX 碰撞体也在原点
+            controllerDesc.position = physx::PxExtendedVec3(
+                0.0f, 
+                PLAYER_LOCAL_HEIGHT, 
+                0.0f
+            );
             controllerDesc.slopeLimit = std::cos(DirectX::XMConvertToRadians(character.maxSlopeAngle));
             controllerDesc.stepOffset = character.stepOffset;
             controllerDesc.contactOffset = 0.2f;  // 增大接触偏移，防止穿透
@@ -329,40 +314,117 @@ int main(int argc, char* argv[]) {
             character.pxController = controllerManager->createController(controllerDesc);
             
             if (character.pxController) {
-                std::cout << "[Player] Created PxCapsuleController at (0, " << PLAYER_HEIGHT << ", 0)" << std::endl;
+                // 验证 PhysX Controller 的实际位置
+                physx::PxExtendedVec3 actualPos = character.pxController->getPosition();
+                std::cout << "[Player] Created PxCapsuleController, requested pos: (0, " 
+                          << PLAYER_LOCAL_HEIGHT << ", 0), actual pos: (" 
+                          << actualPos.x << ", " << actualPos.y << ", " << actualPos.z
+                          << ")" << std::endl;
             } else {
                 std::cout << "[Player] ERROR: Failed to create PxCapsuleController!" << std::endl;
             }
+            // 确保相机在正确的眼睛位置
+            // 【注意】相机位置使用局部坐标，会由 SectorPhysicsSystem 转换到世界坐标
+            {
+                if (scene->GetRegistry().all_of<outer_wilds::components::CameraComponent>(playerEntity) &&
+                    scene->GetRegistry().all_of<outer_wilds::components::CharacterControllerComponent>(playerEntity)) {
+                    auto& cam = scene->GetRegistry().get<outer_wilds::components::CameraComponent>(playerEntity);
+                    auto& ctrl = scene->GetRegistry().get<outer_wilds::components::CharacterControllerComponent>(playerEntity);
+                    // 相机位置 = 玩家脚底 + 眼睛高度
+                    cam.position = { 
+                        0.0f, 
+                        PLAYER_LOCAL_HEIGHT + ctrl.cameraOffset.y, 
+                        0.0f 
+                    };
+                    cam.target = { 
+                        0.0f, 
+                        PLAYER_LOCAL_HEIGHT + ctrl.cameraOffset.y, 
+                        -1.0f 
+                    };
+                }
+            }
             
-            std::cout << "[Player] Created at (0, " << PLAYER_HEIGHT << ", 0) with surface walking physics" << std::endl;
+            std::cout << "[Player] Created at LOCAL (0, " 
+                      << PLAYER_LOCAL_HEIGHT << ", 0) with surface walking physics" << std::endl;
         } else {
             std::cout << "[Player] ERROR: Failed to load model!" << std::endl;
         }
         
-#if 0  // 暂时禁用飞船加载，加速调试
+
         // ========================================
         // 3. 创建飞船实体（在星球表面）
-        // 飞船模型原始尺寸很大，需要缩小到5%
+        // 【注意】FBX模型通常是厘米为单位，需要缩放5%转换为米
+        // 但碰撞盒不能太小，否则物理模拟不稳定，所以碰撞盒使用固定尺寸
         // ========================================
-        const float SPACECRAFT_SCALE = 0.05f;  // 5%缩放
-        const float SPACECRAFT_HALF_HEIGHT = 1.0f * SPACECRAFT_SCALE;  // 飞船高度的一半
-        const float SPACECRAFT_HEIGHT = PLANET_RADIUS + SPACECRAFT_HALF_HEIGHT + 0.5f;  // 放在星球表面
-        const float SPACECRAFT_X_OFFSET = 15.0f;  // X方向偏移
+        const float SPACECRAFT_SCALE = 0.05f;  // 5%缩放（FBX厘米转米）
+        // 飞船原始高度约20m，缩放后约1m
+        const float SPACECRAFT_VISUAL_HEIGHT = 1.0f;  // 飞船视觉高度（缩放后）
+        const float SPACECRAFT_LOCAL_HEIGHT = PLANET_RADIUS + SPACECRAFT_VISUAL_HEIGHT + 0.5f;  // 放在星球表面
+        const float SPACECRAFT_LOCAL_X_OFFSET = 15.0f;  // X方向偏移（局部坐标）
         
-        auto spacecraftEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
+        // 【优化】使用带选项的加载方法，跳过包围盒计算以加速加载
+        outer_wilds::ModelLoadingOptions spacecraftLoadOptions;
+        spacecraftLoadOptions.skipBoundsCalculation = true;  // 飞船使用固定scale，无需计算包围盒
+        spacecraftLoadOptions.fastLoad = true;               // 【快速加载】跳过切线/法线生成
+        spacecraftLoadOptions.verbose = true;
+        
+        auto spacecraftEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntityWithOptions(
             scene->GetRegistry(), scene, device,
             "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\spacecraft\\base_basic_pbr.fbx",
             "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\spacecraft\\texture_diffuse_00.png",
-            DirectX::XMFLOAT3(SPACECRAFT_X_OFFSET, SPACECRAFT_HEIGHT, 0.0f),
-            DirectX::XMFLOAT3(SPACECRAFT_SCALE, SPACECRAFT_SCALE, SPACECRAFT_SCALE)
+            DirectX::XMFLOAT3(SPACECRAFT_LOCAL_X_OFFSET, SPACECRAFT_LOCAL_HEIGHT, 0.0f),  // 局部坐标
+            DirectX::XMFLOAT3(SPACECRAFT_SCALE, SPACECRAFT_SCALE, SPACECRAFT_SCALE),
+            spacecraftLoadOptions
         );
         
         if (spacecraftEntity != entt::null) {
             // InSectorComponent（标记属于星球扇区）
+            // 【关键】飞船位置使用局部坐标（相对于地球中心）
             auto& inSector = scene->GetRegistry().emplace<outer_wilds::components::InSectorComponent>(spacecraftEntity);
             inSector.sector = planetEntity;
-            inSector.localPosition = { SPACECRAFT_X_OFFSET, SPACECRAFT_HEIGHT, 0.0f };
-            inSector.localRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
+            inSector.localPosition = { SPACECRAFT_LOCAL_X_OFFSET, SPACECRAFT_LOCAL_HEIGHT, 0.0f };
+            
+            // 计算飞船朝向：站在星球表面
+            // 【重要】FBX 飞船模型的坐标系（标准FBX约定）：
+            //   - 模型前方 = +Z 方向（船头朝 +Z）
+            //   - 模型上方 = +Y 方向（船顶朝 +Y）
+            //   - 模型右方 = +X 方向
+            // 
+            // 目标世界坐标系：
+            //   - 飞船 "上方"（模型+Y）应该指向星球外（surfaceNormal）
+            //   - 飞船 "前方"（模型+Z）应该沿着地表切线
+            
+            // 步骤1：计算 surfaceNormal（指向天空）= normalize(position)
+            DirectX::XMVECTOR surfaceNormal = DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&inSector.localPosition));
+            
+            // 步骤2：计算地表切线方向（作为飞船前方）
+            DirectX::XMVECTOR worldUp = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+            DirectX::XMVECTOR tangent = DirectX::XMVector3Cross(worldUp, surfaceNormal);
+            
+            float tangentLen = DirectX::XMVectorGetX(DirectX::XMVector3Length(tangent));
+            if (tangentLen < 0.001f) {
+                tangent = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+            tangent = DirectX::XMVector3Normalize(tangent);
+            
+            // 计算第三个轴（右方向）
+            // 【关键】右手坐标系：right = up × forward
+            DirectX::XMVECTOR rightDir = DirectX::XMVector3Cross(surfaceNormal, tangent);
+            rightDir = DirectX::XMVector3Normalize(rightDir);
+            
+            // 步骤3：构建旋转矩阵
+            // 模型坐标系（标准FBX）-> 世界坐标系的映射：
+            //   模型 +X (right)   -> rightDir       (飞船右侧)
+            //   模型 +Y (up)      -> surfaceNormal  (指向天空)
+            //   模型 +Z (forward) -> tangent        (飞船前方)
+            DirectX::XMMATRIX rotMatrix;
+            rotMatrix.r[0] = DirectX::XMVectorSetW(rightDir, 0.0f);        // X 轴 = 右
+            rotMatrix.r[1] = DirectX::XMVectorSetW(surfaceNormal, 0.0f);   // Y 轴 = 上（天空）
+            rotMatrix.r[2] = DirectX::XMVectorSetW(tangent, 0.0f);         // Z 轴 = 前
+            rotMatrix.r[3] = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+            
+            DirectX::XMVECTOR alignQuat = DirectX::XMQuaternionRotationMatrix(rotMatrix);
+            DirectX::XMStoreFloat4(&inSector.localRotation, alignQuat);
             inSector.isInitialized = true;
             
             // GravityAffectedComponent（受重力影响）
@@ -370,12 +432,17 @@ int main(int argc, char* argv[]) {
             gravityAffected.affectedByGravity = true;
             gravityAffected.gravityScale = 1.0f;
             gravityAffected.currentGravitySource = planetEntity;
+            // 【关键】初始化重力方向和强度，否则第一帧重力为0
+            DirectX::XMFLOAT3 gravDir;
+            DirectX::XMStoreFloat3(&gravDir, DirectX::XMVectorNegate(surfaceNormal));
+            gravityAffected.currentGravityDir = gravDir;
+            gravityAffected.currentGravityStrength = SURFACE_GRAVITY;
             
             // RigidBodyComponent（刚体属性）
             auto& rigidBody = scene->GetRegistry().emplace<outer_wilds::RigidBodyComponent>(spacecraftEntity);
             rigidBody.mass = 500.0f;  // 飞船较重
-            rigidBody.drag = 0.5f;
-            rigidBody.angularDrag = 5.0f;  // 高角阻尼防止快速旋转
+            rigidBody.drag = 0.0f;    // 太空无阻力
+            rigidBody.angularDrag = 0.5f;  // 低角阻尼
             rigidBody.useGravity = true;
             rigidBody.isKinematic = false;
             
@@ -386,15 +453,25 @@ int main(int argc, char* argv[]) {
             spacecraft.mass = 500.0f;
             
             // PhysX 动态盒子（飞船碰撞）
-            // 飞船碰撞盒尺寸需要匹配 scale=2 的模型
+            // 【重要】碰撞盒使用固定尺寸，不跟随模型scale
+            // 原因：5cm的碰撞盒会PhysX不稳定，而模型缩放5%后只有约1m大小
+            // 所以碰撞盒略大于视觉模型，确保物理稳定
+            // 这里故意做得更"扁平宽大"，让着陆/摩擦区域更大、更稳
             // [来源: main.cpp 场景初始化]
-            const float BOX_HALF_X = 2.0f * SPACECRAFT_SCALE;  // 宽度
-            const float BOX_HALF_Y = 1.0f * SPACECRAFT_SCALE;  // 高度
-            const float BOX_HALF_Z = 3.0f * SPACECRAFT_SCALE;  // 长度
+            const float BOX_HALF_X = 1.5f;  // 宽度半尺寸 1.5m  → 实宽 3.0m
+            const float BOX_HALF_Y = 0.4f;  // 高度半尺寸 0.4m  → 实高 0.8m（更扁） 
+            const float BOX_HALF_Z = 2.0f;  // 长度半尺寸 2.0m  → 实长 4.0m
             
             // 材质：高摩擦、零弹性，防止弹跳和滑动
             physx::PxMaterial* spacecraftMaterial = pxPhysics->createMaterial(0.8f, 0.8f, 0.0f);
-            physx::PxTransform spacecraftPose(physx::PxVec3(SPACECRAFT_X_OFFSET, SPACECRAFT_HEIGHT, 0.0f));
+            // 【关键】PhysX Actor 使用局部坐标（相对于地球扇区原点）
+            // 同时设置旋转，使飞船朝向正确
+            physx::PxQuat pxRotation(inSector.localRotation.x, inSector.localRotation.y, 
+                                     inSector.localRotation.z, inSector.localRotation.w);
+            physx::PxTransform spacecraftPose(
+                physx::PxVec3(SPACECRAFT_LOCAL_X_OFFSET, SPACECRAFT_LOCAL_HEIGHT, 0.0f),
+                pxRotation
+            );
             physx::PxRigidDynamic* spacecraftActor = pxPhysics->createRigidDynamic(spacecraftPose);
             
             // 使用盒子作为飞船碰撞形状
@@ -408,120 +485,31 @@ int main(int argc, char* argv[]) {
             
             physx::PxRigidBodyExt::updateMassAndInertia(*spacecraftActor, 1.0f);
             spacecraftActor->setMass(rigidBody.mass);
-            spacecraftActor->setLinearDamping(2.0f);   // 高线性阻尼
-            spacecraftActor->setAngularDamping(10.0f); // 很高的角阻尼
-            spacecraftActor->setMaxLinearVelocity(200.0f);
-            spacecraftActor->setMaxAngularVelocity(1.0f);  // 更低的最大角速度
-            spacecraftActor->setSolverIterationCounts(16, 8);  // 更多迭代提高稳定性
+            // 【物理参数】适当的阻尼，既能在太空保持漂移，又能在接触地面时快速稳定
+            spacecraftActor->setLinearDamping(0.2f);   // 轻微线性阻尼，减少地面碰撞后的滑动颤抖
+            spacecraftActor->setAngularDamping(2.0f);  // 提高角阻尼，抑制旋转抖动
+            spacecraftActor->setMaxLinearVelocity(500.0f);  // 更高最大速度
+            spacecraftActor->setMaxAngularVelocity(3.0f);   // 限制最大角速度（防止旋转太快）
+            spacecraftActor->setSolverIterationCounts(8, 4);
             
-            // 设置睡眠阈值，让飞船更快进入静止状态
-            spacecraftActor->setSleepThreshold(0.5f);
+            // 降低睡眠阈值，让飞船在有重力时不会轻易睡眠
+            spacecraftActor->setSleepThreshold(0.05f);
             
             pxScene->addActor(*spacecraftActor);
             spacecraftActor->wakeUp();
             rigidBody.physxActor = spacecraftActor;
             
-            std::cout << "[Spacecraft] Created at (" << SPACECRAFT_X_OFFSET << ", " << SPACECRAFT_HEIGHT << ", 0)" 
-                      << " with collision box (" << BOX_HALF_X*2 << "x" << BOX_HALF_Y*2 << "x" << BOX_HALF_Z*2 << ")" << std::endl;
+            std::cout << "[Spacecraft] Created at LOCAL (" << SPACECRAFT_LOCAL_X_OFFSET 
+                      << ", " << SPACECRAFT_LOCAL_HEIGHT << ", 0)" 
+                      << " with collision box (" << BOX_HALF_X*2 << "x" << BOX_HALF_Y*2 << "x" << BOX_HALF_Z*2 << ")"
+                      << ", model scale=" << SPACECRAFT_SCALE << " (5%, FBX cm->m)" << std::endl;
         } else {
             std::cout << "[Spacecraft] ERROR: Failed to load model!" << std::endl;
         }
-#endif  // 暂时禁用飞船
+
         
-        // ========================================
-        // 4. 创建太阳（轨道中心，GLB模型，带发光材质）
-        // ========================================
-        std::cout << "\n=== Loading Sun (GLB with Emissive) ===" << std::endl;
-        entt::entity sunEntity = entt::null;
-        {
-            // 先加载模型获取尺寸信息
-            outer_wilds::resources::LoadedModel sunModel;
-            if (outer_wilds::resources::AssimpLoader::LoadFromFile(
-                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\sun\\sun_final.glb", sunModel)) {
-                
-                std::cout << "[Sun] Model bounds: " 
-                          << sunModel.bounds.size.x << " x " 
-                          << sunModel.bounds.size.y << " x " 
-                          << sunModel.bounds.size.z << std::endl;
-                std::cout << "[Sun] Bounding sphere radius: " << sunModel.bounds.radius << std::endl;
-            }
-            
-            // 太阳缩放：设置太阳半径约为50米（比地球小一些，方便观察）
-            const float SUN_SCALE = 25.0f;  // 调整这个值来改变太阳大小
-            
-            // 太阳位于轨道中心
-            sunEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
-                scene->GetRegistry(), scene, device,
-                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\sun\\sun_final.glb",
-                "",  // 使用GLB嵌入式纹理（包含发光贴图）
-                DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),  // 轨道中心
-                DirectX::XMFLOAT3(SUN_SCALE, SUN_SCALE, SUN_SCALE)   // 缩放到合适大小
-            );
-            
-            if (sunEntity != entt::null) {
-                // 给太阳添加自转
-                auto& sunOrbit = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(sunEntity);
-                sunOrbit.orbitEnabled = false;           // 太阳不公转（它是中心）
-                sunOrbit.rotationEnabled = true;         // 太阳自转
-                sunOrbit.rotationPeriod = 60.0f;         // 自转周期60秒
-                sunOrbit.rotationAxis = { 0.0f, 1.0f, 0.0f };
-                
-                // 设置太阳实体给渲染系统（用于动态光照）
-                engine.GetRenderSystem()->SetSunEntity(sunEntity);
-                
-                std::cout << "[Sun] Created at orbit center (0, 0, 0) with rotation" << std::endl;
-            } else {
-                std::cout << "[Sun] ERROR: Failed to load GLB model!" << std::endl;
-            }
-        }
-        
-        // ========================================
-        // 5. 创建月球（围绕地球的轨道，使用OBJ模型）
-        // ========================================
-        std::cout << "\n=== Loading Moon (OBJ with Earth Orbit) ===" << std::endl;
-        {
-            // 月球围绕地球的轨道参数
-            const float MOON_ORBIT_RADIUS = 120.0f;  // 月球到地球的距离（地球半径64m，月球轨道120m比较合适）
-            const float MOON_ORBIT_PERIOD = 45.0f;   // 公转周期（秒）- 比地球公转快
-            const float MOON_SCALE = 1.5f;           // 月球缩放（比地球小，约1/4大小）
-            
-            // 初始位置需要考虑地球的初始位置（地球初始在X=200处，因为角度为0）
-            const float EARTH_INITIAL_X = 200.0f;    // 地球轨道半径
-            
-            auto moonEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntity(
-                scene->GetRegistry(), scene, device,
-                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\BlendObj\\planet_earth.obj",  // 使用新的球体模型
-                "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Texture\\plastered_stone_wall_diff_2k.jpg",  // 使用纹理
-                DirectX::XMFLOAT3(EARTH_INITIAL_X + MOON_ORBIT_RADIUS, 0.0f, 0.0f),  // 初始位置（地球右侧）
-                DirectX::XMFLOAT3(MOON_SCALE, MOON_SCALE, MOON_SCALE)
-            );
-            
-            if (moonEntity != entt::null) {
-                // OrbitComponent（月球轨道 - 围绕地球公转！）
-                auto& orbitComp = scene->GetRegistry().emplace<outer_wilds::components::OrbitComponent>(moonEntity);
-                orbitComp.orbitParent = planetEntity;                   // 【关键】围绕地球公转！
-                orbitComp.orbitCenter = { EARTH_INITIAL_X, 0.0f, 0.0f }; // 初始中心（会被orbitParent覆盖）
-                orbitComp.orbitRadius = MOON_ORBIT_RADIUS;              // 轨道半径（离地球的距离）
-                orbitComp.orbitPeriod = MOON_ORBIT_PERIOD;              // 公转周期
-                orbitComp.orbitAngle = 0.0f;                            // 初始角度
-                orbitComp.orbitNormal = { 0.0f, 1.0f, 0.0f };          // 在XZ平面公转
-                orbitComp.orbitInclination = 0.1f;                      // 轻微轨道倾斜（更真实）
-                orbitComp.orbitEnabled = true;
-                orbitComp.rotationEnabled = true;                       // 月球潮汐锁定（自转=公转周期）
-                orbitComp.rotationPeriod = MOON_ORBIT_PERIOD;           // 自转周期与公转同步
-                
-                std::cout << "[Moon] Created orbiting Earth: radius=" << MOON_ORBIT_RADIUS 
-                          << "m, period=" << MOON_ORBIT_PERIOD << "s, scale=" << MOON_SCALE << std::endl;
-            } else {
-                std::cout << "[Moon] ERROR: Failed to load OBJ model!" << std::endl;
-            }
-        }
-        
-        std::cout << "\n=== Full Test Scene Ready ===" << std::endl;
-        std::cout << "Controls: WASD=Move, Mouse=Look, Shift=Fast, Space=Up, Ctrl=Down" << std::endl;
-        std::cout << "ESC+Backspace = Toggle mouse lock, Shift+ESC = Exit" << std::endl;
-        std::cout << std::endl;
-        
+        // 太阳系已通过 SolarSystemBuilder 创建
+
         // ========================================
         // 启动欢迎界面流程
         // ========================================

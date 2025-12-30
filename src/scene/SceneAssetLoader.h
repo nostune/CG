@@ -14,6 +14,7 @@ namespace resources {
     class Mesh;
     class Material;
     struct EmbeddedTexture;  // For GLB embedded textures
+    struct ModelBounds;      // For model bounds info
 }
 
 // Physics configuration for loaded models
@@ -36,6 +37,21 @@ struct PhysicsOptions {
 };
 
 /**
+ * Model loading options for performance optimization
+ * 
+ * 【性能提示】
+ * - skipBoundsCalculation: 跳过包围盒计算，适用于已知尺寸的模型
+ * - fastLoad: 跳过切线/法线生成，加载速度提升 2-5 倍，但需要模型自带这些数据
+ * - verbose: 是否输出调试信息
+ */
+struct ModelLoadingOptions {
+    bool skipBoundsCalculation = false;  // Skip bounding box calculation (for known-scale models)
+    bool verbose = true;                  // Print loading messages
+    bool fastLoad = false;                // Skip tangent/normal generation (2-5x faster)
+    bool flipUpAxis = false;              // Flip model up axis (rotate 180 degrees around forward axis)
+};
+
+/**
  * Scene Asset Loader
  * 
  * Handles loading of complex scenes with multiple objects following ECS pattern.
@@ -50,12 +66,76 @@ struct PhysicsOptions {
  * Alternative approaches:
  * - LoadModelAsEntity(): Load single OBJ model as one entity
  * - LoadModelWithMaterials(): Load OBJ with MTL material file
+ * - LoadMultiMaterialModelAsEntities(): Load FBX/GLTF with multiple materials as child entities
  * - CreatePrefabEntity(): Create reusable entity templates
  */
 class SceneAssetLoader {
 public:
     SceneAssetLoader() = default;
     ~SceneAssetLoader() = default;
+
+    /**
+     * 【归一化加载方法】加载模型并自动缩放到指定直径
+     * 
+     * 自动计算模型边界，将模型缩放到指定大小
+     * 
+     * @param registry ECS registry
+     * @param scene Scene to add entity to
+     * @param device D3D11 device
+     * @param modelPath Path to model file (OBJ, FBX, GLB, etc.)
+     * @param texturePath Path to texture file (optional, auto-detect from model)
+     * @param position World position
+     * @param targetDiameter Target diameter in meters (e.g. 64.0f for a 64m wide planet)
+     * @param outActualRadius Output: actual radius after scaling (optional)
+     * @return Entity ID
+     */
+    static entt::entity LoadModelWithDiameter(
+        entt::registry& registry,
+        std::shared_ptr<Scene> scene,
+        ID3D11Device* device,
+        const std::string& modelPath,
+        const std::string& texturePath,
+        const DirectX::XMFLOAT3& position,
+        float targetDiameter,
+        float* outActualRadius = nullptr
+    );
+
+    /**
+     * 【归一化加载方法】加载模型并自动缩放到指定半径
+     * 
+     * @param registry ECS registry
+     * @param scene Scene to add entity to
+     * @param device D3D11 device
+     * @param modelPath Path to model file (OBJ, FBX, GLB, etc.)
+     * @param texturePath Path to texture file (optional, auto-detect from model)
+     * @param position World position
+     * @param targetRadius Target radius in meters (e.g. 32.0f for a 32m radius planet)
+     * @param outActualRadius Output: actual radius after scaling (optional)
+     * @return Entity ID
+     */
+    static entt::entity LoadModelWithRadius(
+        entt::registry& registry,
+        std::shared_ptr<Scene> scene,
+        ID3D11Device* device,
+        const std::string& modelPath,
+        const std::string& texturePath,
+        const DirectX::XMFLOAT3& position,
+        float targetRadius,
+        float* outActualRadius = nullptr
+    );
+    
+    /**
+     * 获取模型边界信息（不加载实体）
+     * 用于预先获取模型尺寸以进行计算
+     * 
+     * @param modelPath Path to model file
+     * @param outBounds Output: model bounds
+     * @return true if successful
+     */
+    static bool GetModelBounds(
+        const std::string& modelPath,
+        resources::ModelBounds& outBounds
+    );
 
     /**
      * Load a single 3D model as an entity
@@ -77,6 +157,43 @@ public:
         const DirectX::XMFLOAT3& position = {0, 0, 0},
         const DirectX::XMFLOAT3& scale = {1, 1, 1},
         const PhysicsOptions* physicsOpts = nullptr
+    );
+    
+    /**
+     * Load a single 3D model as an entity with loading options
+     * Use this overload when you need to skip bounds calculation for known-scale models
+     */
+    static entt::entity LoadModelAsEntityWithOptions(
+        entt::registry& registry,
+        std::shared_ptr<Scene> scene,
+        ID3D11Device* device,
+        const std::string& objPath,
+        const std::string& texturePath,
+        const DirectX::XMFLOAT3& position,
+        const DirectX::XMFLOAT3& scale,
+        const ModelLoadingOptions& options
+    );
+
+    /**
+     * Load a multi-material model (FBX, GLTF, etc.) as multiple child entities
+     * Each material gets its own entity with correct texture mapping
+     * @param registry ECS registry
+     * @param scene Scene to add entities to
+     * @param device D3D11 device
+     * @param modelPath Path to model file (FBX, GLTF, GLB, etc.)
+     * @param textureDir Directory containing textures (will auto-match by material name)
+     * @param position World position
+     * @param scale Scale factor
+     * @return Parent entity ID (children are attached via TransformComponent.parent)
+     */
+    static entt::entity LoadMultiMaterialModelAsEntities(
+        entt::registry& registry,
+        std::shared_ptr<Scene> scene,
+        ID3D11Device* device,
+        const std::string& modelPath,
+        const std::string& textureDir = "",
+        const DirectX::XMFLOAT3& position = {0, 0, 0},
+        const DirectX::XMFLOAT3& scale = {1, 1, 1}
     );
 
     /**
@@ -105,6 +222,30 @@ public:
         std::shared_ptr<Scene> scene,
         ID3D11Device* device,
         const std::string& sceneFilePath
+    );
+
+    /**
+     * Load a multi-material model with normalized radius
+     * Each material gets its own entity with correct texture mapping
+     * @param registry ECS registry
+     * @param scene Scene to add entities to
+     * @param device D3D11 device
+     * @param modelPath Path to model file (FBX, GLTF, GLB, etc.)
+     * @param textureDir Directory containing textures (will auto-match by material name)
+     * @param position World position
+     * @param targetRadius Target radius in meters
+     * @param outActualRadius Output: actual radius after scaling (optional)
+     * @return Main entity ID (all sub-meshes share same transform)
+     */
+    static entt::entity LoadMultiMaterialModelWithRadius(
+        entt::registry& registry,
+        std::shared_ptr<Scene> scene,
+        ID3D11Device* device,
+        const std::string& modelPath,
+        const std::string& textureDir,
+        const DirectX::XMFLOAT3& position,
+        float targetRadius,
+        float* outActualRadius = nullptr
     );
 
     /**

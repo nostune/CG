@@ -3,6 +3,7 @@
 #include "Material.h"
 #include <string>
 #include <vector>
+#include <map>
 #include <memory>
 #include <d3d11.h>
 #include <assimp/Importer.hpp>
@@ -46,6 +47,35 @@ struct ModelBounds {
     float radius = 0;  // Bounding sphere radius
 };
 
+/**
+ * @brief Sub-mesh with its own material (for multi-material models)
+ */
+struct SubMesh {
+    std::shared_ptr<Mesh> mesh;
+    std::string materialName;
+    int materialIndex = -1;
+    
+    // Texture paths for this submesh's material
+    std::vector<std::string> texturePaths;  // [albedo, normal, metallic, roughness, ao, emissive]
+    std::vector<EmbeddedTexture> embeddedTextures;
+};
+
+/**
+ * @brief Multi-material model data
+ */
+struct MultiMaterialModel {
+    std::vector<SubMesh> subMeshes;
+    ModelBounds bounds;
+    
+    // Collision mesh data (if exists)
+    std::vector<Vertex> collisionVertices;
+    std::vector<uint32_t> collisionIndices;
+    bool hasCollisionMesh = false;
+    
+    // Texture type indices (same as LoadedModel)
+    enum TextureType { ALBEDO = 0, NORMAL = 1, METALLIC = 2, ROUGHNESS = 3, AO = 4, EMISSIVE = 5, MAX_TEXTURES = 6 };
+};
+
 struct LoadedModel {
     std::shared_ptr<Mesh> mesh;
     std::vector<std::string> texturePaths;          // External texture paths [albedo, normal, metallic, roughness]
@@ -71,15 +101,35 @@ struct LoadedModel {
     }
 };
 
+/**
+ * @brief Options for model loading
+ */
+struct ModelLoadOptions {
+    bool skipBoundsCalculation = false;  // Skip bounding box calculation (for known-scale models)
+    bool verbose = true;                  // Print loading messages
+    bool fastLoad = false;                // Use fast loading (skip tangent/normal generation)
+};
+
 class AssimpLoader {
 public:
     /**
      * @brief Load model from file (supports FBX, GLTF, GLB, OBJ, etc.)
      * @param filePath Path to model file
      * @param outModel Output model data with mesh and textures
+     * @param options Loading options (optional)
      * @return true if successful
      */
-    static bool LoadFromFile(const std::string& filePath, LoadedModel& outModel);
+    static bool LoadFromFile(const std::string& filePath, LoadedModel& outModel, 
+                             const ModelLoadOptions& options = {});
+
+    /**
+     * @brief Load multi-material model from file
+     * Each material gets its own sub-mesh for proper texture mapping
+     * @param filePath Path to model file
+     * @param outModel Output multi-material model data
+     * @return true if successful
+     */
+    static bool LoadMultiMaterialModel(const std::string& filePath, MultiMaterialModel& outModel);
 
     /**
      * @brief Create GPU texture from embedded texture data
@@ -105,6 +155,21 @@ private:
                            std::vector<Vertex>& vertices,
                            std::vector<uint32_t>& indices);
     
+    /**
+     * @brief Process node for multi-material model
+     * Groups meshes by material index
+     */
+    static void ProcessNodeMultiMaterial(aiNode* node, const aiScene* scene,
+                                         std::map<int, std::pair<std::vector<Vertex>, std::vector<uint32_t>>>& materialMeshes,
+                                         std::vector<Vertex>& collisionVertices,
+                                         std::vector<uint32_t>& collisionIndices);
+    
+    /**
+     * @brief Extract texture paths for a specific material
+     */
+    static std::vector<std::string> ExtractMaterialTexturePaths(aiMaterial* material, 
+                                                                 const std::string& modelDir);
+    
     static std::vector<std::string> ExtractTexturePaths(const aiScene* scene, 
                                                         const std::string& modelDir);
     
@@ -114,6 +179,14 @@ private:
     static std::vector<EmbeddedTexture> ExtractEmbeddedTextures(
         const aiScene* scene,
         const std::string& modelDir
+    );
+    
+    /**
+     * @brief Extract embedded textures for a specific material
+     */
+    static std::vector<EmbeddedTexture> ExtractMaterialEmbeddedTextures(
+        const aiScene* scene,
+        aiMaterial* material
     );
     
     /**

@@ -72,10 +72,30 @@ void OrbitSystem::UpdateOrbits(float deltaTime, entt::registry& registry) {
             orbit.orbitInclination
         );
         
+        // 计算轨道速度（切向速度 = 角速度 × 轨道半径）
+        // 速度方向垂直于位置向量，在轨道平面内
+        DirectX::XMFLOAT3 orbitVelocity = { 0.0f, 0.0f, 0.0f };
+        if (orbit.orbitEnabled && orbit.orbitPeriod > 0.0f) {
+            // 轨道线速度大小 = 2πr / T = 角速度 × 半径
+            float linearSpeed = angularVelocity * orbit.orbitRadius;
+            // 速度方向：垂直于径向，在轨道平面内
+            // 径向 = (pos - center) 的归一化
+            float dx = newPosition.x - center.x;
+            float dz = newPosition.z - center.z;
+            float r = std::sqrt(dx*dx + dz*dz);
+            if (r > 0.001f) {
+                // 切向 = 垂直于径向，逆时针方向（默认轨道方向）
+                orbitVelocity.x = -dz / r * linearSpeed;
+                orbitVelocity.y = 0.0f;  // 假设水平轨道
+                orbitVelocity.z = dx / r * linearSpeed;
+            }
+        }
+        
         // 更新 SectorComponent（如果存在）
         auto* sector = registry.try_get<SectorComponent>(entity);
         if (sector) {
             sector->worldPosition = newPosition;
+            sector->worldVelocity = orbitVelocity;  // 更新扇区速度
         }
         
         // 更新 TransformComponent（如果存在）

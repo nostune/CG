@@ -33,13 +33,14 @@ struct SpacecraftComponent {
     float verticalThrust = 12000.0f;   // 垂直推力（上下）
     
     // === 旋转力矩参数（N·m）===
-    float rollTorque = 8000.0f;        // 滚转力矩（Q/E）
-    float pitchTorque = 6000.0f;       // 俯仰力矩（预留，暂不使用）
-    float yawTorque = 6000.0f;         // 偏航力矩（预留，暂不使用）
+    // 数值偏小一些，让旋转更平滑、手感更细腻
+    float rollTorque = 500.0f;        // 滚转力矩（Q/E）
+    float pitchTorque = 100.0f;        // 俯仰力矩（上/下箭头），大幅减小，避免一按猛抬头
+    float yawTorque = 300.0f;         // 偏航力矩（左/右箭头）
     
     // === 阻尼参数（PhysX 设置）===
     float linearDamping = 0.3f;        // 线性阻尼
-    float angularDamping = 2.0f;       // 角阻尼（更高的值使旋转更容易停止）
+    float angularDamping = 5.0f;       // 角阻尼（更高的值使旋转更容易停止）
     
     // === 质量参数 ===
     float mass = 500.0f;               // 飞船质量（kg）
@@ -48,8 +49,12 @@ struct SpacecraftComponent {
     float interactionDistance = 10.0f; // 上下飞船的交互距离
     DirectX::XMFLOAT3 exitOffset = { 5.0f, 0.0f, 0.0f }; // 下飞船时玩家的偏移位置（局部坐标）
     
-    // === 相机参数 ===
-    DirectX::XMFLOAT3 cameraOffset = { 0.0f, 2.0f, 0.0f }; // 驾驶位相机偏移（局部坐标）
+    // === 第三人称相机参数 ===
+    float cameraDistance = 8.0f;       // 相机距离飞船的距离（后方）
+    float cameraHeight = 3.0f;         // 相机高度偏移（相对于飞船上方）
+    float cameraLookAheadDistance = 5.0f; // 相机注视点前方偏移
+    float cameraSmoothSpeed = 5.0f;    // 相机平滑跟随速度（更快响应）
+    DirectX::XMFLOAT3 cameraOffset = { 0.0f, 2.0f, 0.0f }; // 驾驶位相机偏移（局部坐标，已废弃，保留兼容）
     
     // === 当前输入状态（每帧更新）===
     float inputForward = 0.0f;    // W/S: -1 到 1
