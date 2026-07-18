@@ -50,7 +50,8 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
     const std::string& texturePath,
     const DirectX::XMFLOAT3& position,
     const DirectX::XMFLOAT3& scale,
-    const PhysicsOptions* physicsOpts  // 【忽略】物理选项不再使用
+    const PhysicsOptions* physicsOpts,  // 【忽略】物理选项不再使用
+    const DirectX::XMFLOAT3* modelCenter
 ) {
     std::string ext = GetFileExtension(objPath);
     std::shared_ptr<Mesh> mesh = nullptr;
@@ -88,6 +89,16 @@ entt::entity SceneAssetLoader::LoadModelAsEntity(
     if (!mesh) {
         DebugManager::GetInstance().Log("SceneAssetLoader", "Failed to load mesh: " + objPath);
         return entt::null;
+    }
+
+    if (modelCenter) {
+        auto centeredVertices = mesh->GetVertices();
+        for (auto& vertex : centeredVertices) {
+            vertex.position.x -= modelCenter->x;
+            vertex.position.y -= modelCenter->y;
+            vertex.position.z -= modelCenter->z;
+        }
+        mesh->SetVertices(centeredVertices);
     }
 
     // Create mesh GPU buffers
@@ -746,7 +757,7 @@ entt::entity SceneAssetLoader::LoadModelWithRadius(
     DirectX::XMFLOAT3 scale = { scaleFactor, scaleFactor, scaleFactor };
     
     entt::entity entity = LoadModelAsEntity(
-        registry, scene, device, modelPath, texturePath, position, scale, nullptr
+        registry, scene, device, modelPath, texturePath, position, scale, nullptr, &bounds.center
     );
     
     // 5. 输出实际半径

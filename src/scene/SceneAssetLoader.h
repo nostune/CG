@@ -156,7 +156,8 @@ public:
         const std::string& texturePath = "",
         const DirectX::XMFLOAT3& position = {0, 0, 0},
         const DirectX::XMFLOAT3& scale = {1, 1, 1},
-        const PhysicsOptions* physicsOpts = nullptr
+        const PhysicsOptions* physicsOpts = nullptr,
+        const DirectX::XMFLOAT3* modelCenter = nullptr
     );
     
     /**

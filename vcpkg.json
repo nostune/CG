@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "outerwilds-ecs",
+  "version-string": "0.2.0",
+  "builtin-baseline": "67f167b2f7c170f83688919c90edcd896239330e",
+  "dependencies": [
+    "assimp",
+    "entt",
+    {
+      "name": "imgui",
+      "features": [
+        "dx11-binding",
+        "win32-binding"
+      ]
+    },
+    "minimp3",
+    "physx",
+    "stb"
+  ],
+  "overrides": [
+    {
+      "name": "assimp",
+      "version": "6.0.2",
+      "port-version": 0
+    },
+    {
+      "name": "imgui",
+      "version": "1.91.9",
+      "port-version": 0
+    }
+  ]
+}

@@ -160,6 +160,7 @@ private:
             sector.influenceRadius = 15000.0f;
             sector.priority = -100;  // 最低优先级，只有不在任何行星扇区时才使用
             sector.isActive = true;
+            sector.rotatesWithBody = false;
             
             // 太阳不需要碰撞体（不能着陆）
             sector.physxGround = nullptr;
@@ -196,9 +197,11 @@ private:
         
         
         // 计算初始位置（基于轨道半径和初始角度）
-        float x = config.orbitRadius * std::cos(config.initialAngle);
-        float z = config.orbitRadius * std::sin(config.initialAngle);
-        DirectX::XMFLOAT3 position = { x, 0.0f, z };
+        const float x = config.orbitRadius * std::cos(config.initialAngle);
+        const float flatZ = config.orbitRadius * std::sin(config.initialAngle);
+        const float y = flatZ * std::sin(config.orbitInclination);
+        const float z = flatZ * std::cos(config.orbitInclination);
+        DirectX::XMFLOAT3 position = { x, y, z };
 
         // 检测文件扩展名，决定使用哪种加载方式
         std::string ext = modelPath.substr(modelPath.find_last_of('.') + 1);
@@ -288,6 +291,7 @@ private:
                 // 【关键修复】碰撞体在原点，而不是世界位置！
                 physx::PxTransform pose(physx::PxVec3(0.0f, 0.0f, 0.0f));
                 physx::PxRigidStatic* actor = pxPhysics->createRigidStatic(pose);
+                actor->setName(sector.name.c_str());
                 
                 physx::PxShape* shape = physx::PxRigidActorExt::createExclusiveShape(
                     *actor,
@@ -401,6 +405,7 @@ private:
             // 碰撞体在扇区原点
             physx::PxTransform pose(physx::PxVec3(0.0f, 0.0f, 0.0f));
             physx::PxRigidStatic* actor = pxPhysics->createRigidStatic(pose);
+            actor->setName(sector.name.c_str());
             
             physx::PxShape* shape = physx::PxRigidActorExt::createExclusiveShape(
                 *actor,

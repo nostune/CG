@@ -56,8 +56,6 @@ void PlayerSystem::Shutdown() {
 }
 
 void PlayerSystem::ProcessPlayerInput(float deltaTime, entt::registry& registry) {
-    InputManager::GetInstance().Update();
-
     // 如果自由相机激活，则屏蔽玩家输入，避免干涉玩家实体
     bool freeCameraActive = false;
     {

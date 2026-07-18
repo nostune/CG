@@ -12,8 +12,11 @@
 #include "components/GravityAffectedComponent.h"
 #include "../scene/components/TransformComponent.h"
 #include "../gameplay/components/SpacecraftComponent.h"
+#include "../gameplay/components/CharacterControllerComponent.h"
 #include "../core/DebugManager.h"
+#include <algorithm>
 #include <cmath>
+#include <sstream>
 
 namespace outer_wilds {
 
@@ -39,7 +42,7 @@ void SectorPhysicsSystem::Shutdown() {
 
 void SectorPhysicsSystem::PrePhysicsUpdate(float deltaTime, entt::registry& registry) {
     // 0. 检测并执行扇区切换（必须在碰撞体切换之前！）
-    CheckAndSwitchSectors(registry);
+    CheckAndSwitchSectors(deltaTime, registry);
     
     // 1. 扇区碰撞体切换：必须在 simulate 之前执行！
     UpdateSectorCollisions(registry);
@@ -59,10 +62,8 @@ void SectorPhysicsSystem::PostPhysicsUpdate(float deltaTime, entt::registry& reg
     SyncDynamicFromPhysX(registry);
     
     // 应用渐进式速度补偿（扇区切换时的平滑过渡）
-    ApplyVelocityCompensation(deltaTime, registry);
     
     // 飞船稳定化：当飞船接近地面且速度低时，让它sleep
-    StabilizeSpacecraft(registry);
     
     // 每10秒打印当前扇区状态
     static float sectorInfoTimer = 0.0f;
@@ -93,6 +94,12 @@ void SectorPhysicsSystem::CalculateGravity(entt::registry& registry) {
         auto& transform = affectedView.get<TransformComponent>(entity);
         
         if (!affected.affectedByGravity) continue;
+
+        // Gravity is derived every frame. Never carry a previous sector's
+        // source or force into sectorless space when no source is in range.
+        affected.currentGravitySource = entt::null;
+        affected.currentGravityStrength = 0.0f;
+        affected.currentGravityDir = {0.0f, 0.0f, 0.0f};
         
         // 获取实体位置（优先使用 InSectorComponent 的局部坐标）
         DirectX::XMFLOAT3 entityPos = transform.position;
@@ -164,6 +171,7 @@ void SectorPhysicsSystem::ApplyGravityForces(entt::registry& registry) {
         
         auto* dynamicActor = rigidBody.physxActor->is<physx::PxRigidDynamic>();
         if (!dynamicActor) continue;
+        if (dynamicActor->isSleeping()) continue;
         
         // 计算重力力 = 质量 * 重力加速度 * 方向
         float mass = rigidBody.mass;
@@ -221,7 +229,6 @@ void SectorPhysicsSystem::SyncDynamicFromPhysX(entt::registry& registry) {
     for (auto entity : view) {
         auto& rigidBody = view.get<RigidBodyComponent>(entity);
         auto& inSector = view.get<InSectorComponent>(entity);
-        auto& transform = view.get<TransformComponent>(entity);
         
         if (rigidBody.isKinematic) continue;
         if (!rigidBody.physxActor) continue;
@@ -235,11 +242,7 @@ void SectorPhysicsSystem::SyncDynamicFromPhysX(entt::registry& registry) {
         if (inSector.sector != entt::null) {
             auto* sector = registry.try_get<SectorComponent>(inSector.sector);
             if (sector) {
-                transform.position = LocalToWorld(inSector.localPosition, 
-                                                   sector->worldPosition, 
-                                                   sector->worldRotation);
                 // 组合旋转：实体局部旋转 + 扇区世界旋转
-                transform.rotation = CombineRotations(inSector.localRotation, sector->worldRotation);
             }
         }
     }
@@ -263,7 +266,12 @@ void SectorPhysicsSystem::SyncSectorEntities(entt::registry& registry) {
         auto& inSector = view.get<InSectorComponent>(entity);
         auto& transform = view.get<TransformComponent>(entity);
         
-        if (inSector.sector == entt::null) continue;
+        if (inSector.sector == entt::null) {
+            // Outside a sector, PhysX and InSector use world-space coordinates.
+            transform.position = inSector.localPosition;
+            transform.rotation = inSector.localRotation;
+            continue;
+        }
         
         auto* sector = registry.try_get<SectorComponent>(inSector.sector);
         if (!sector) continue;
@@ -428,85 +436,26 @@ void SectorPhysicsSystem::PrintPhysicsDebugInfo(entt::registry& registry) {
     }
 }
 
-void SectorPhysicsSystem::StabilizeSpacecraft(entt::registry& registry) {
-    const float PLANET_RADIUS = 64.0f;  // 星球半径
-    const float GROUND_THRESHOLD = 1.0f; // 距离地面阈值
-    const float VELOCITY_THRESHOLD = 0.5f;  // 速度阈值
-    const float ANGULAR_VELOCITY_THRESHOLD = 0.3f;  // 角速度阈值
-    
-    auto view = registry.view<SpacecraftComponent, RigidBodyComponent, InSectorComponent>();
-    
-    for (auto entity : view) {
-        auto& spacecraft = view.get<SpacecraftComponent>(entity);
-        auto& rigidBody = view.get<RigidBodyComponent>(entity);
-        auto& inSector = view.get<InSectorComponent>(entity);
-        
-        // 只处理IDLE状态的飞船
-        if (spacecraft.currentState != SpacecraftComponent::State::IDLE) continue;
-        if (!rigidBody.physxActor) continue;
-        
-        auto* dynamicActor = rigidBody.physxActor->is<physx::PxRigidDynamic>();
-        if (!dynamicActor) continue;
-        
-        // 计算到原点的距离
-        float dist = std::sqrt(
-            inSector.localPosition.x * inSector.localPosition.x +
-            inSector.localPosition.y * inSector.localPosition.y +
-            inSector.localPosition.z * inSector.localPosition.z
-        );
-        
-        // 计算到地面的距离
-        float groundDist = dist - PLANET_RADIUS;
-        
-        // 获取当前速度
-        physx::PxVec3 linearVel = dynamicActor->getLinearVelocity();
-        physx::PxVec3 angularVel = dynamicActor->getAngularVelocity();
-        float speed = linearVel.magnitude();
-        float angularSpeed = angularVel.magnitude();
-        
-        // 如果飞船接近地面且速度低，让它稳定下来
-        if (groundDist < GROUND_THRESHOLD) {
-            // 强制降低角速度
-            if (angularSpeed > ANGULAR_VELOCITY_THRESHOLD) {
-                dynamicActor->setAngularVelocity(angularVel * 0.8f);  // 快速衰减
-            }
-            
-            // 如果速度足够低，让飞船sleep
-            if (speed < VELOCITY_THRESHOLD && angularSpeed < ANGULAR_VELOCITY_THRESHOLD) {
-                // 清零速度
-                dynamicActor->setLinearVelocity(physx::PxVec3(0.0f));
-                dynamicActor->setAngularVelocity(physx::PxVec3(0.0f));
-                
-                // 让飞船进入sleep状态
-                if (!dynamicActor->isSleeping()) {
-                    dynamicActor->putToSleep();
-                    spacecraft.isGrounded = true;
-                }
-            }
-        } else {
-            spacecraft.isGrounded = false;
-        }
-    }
-}
-
 void SectorPhysicsSystem::UpdateSectorCollisions(entt::registry& registry) {
     // 找到需要激活碰撞的扇区
     // 优先使用飞船驾驶时的飞船扇区，否则使用玩家扇区
     entt::entity targetSector = entt::null;
+    bool pilotedSpacecraftFound = false;
     
     // 先检查是否有正在被驾驶的飞船
     auto spacecraftView = registry.view<SpacecraftComponent, InSectorComponent>();
     for (auto entity : spacecraftView) {
         auto& spacecraft = spacecraftView.get<SpacecraftComponent>(entity);
         auto& inSector = spacecraftView.get<InSectorComponent>(entity);
-        if (spacecraft.currentState == SpacecraftComponent::State::PILOTED && inSector.sector != entt::null) {
+        if (spacecraft.currentState == SpacecraftComponent::State::PILOTED) {
+            pilotedSpacecraftFound = true;
             targetSector = inSector.sector;
             break;
         }
     }
     
     // 如果没有驾驶飞船，使用玩家扇区
-    if (targetSector == entt::null) {
+    if (!pilotedSpacecraftFound) {
         auto playerView = registry.view<GravityAffectedComponent, InSectorComponent>(entt::exclude<SpacecraftComponent>);
         for (auto entity : playerView) {
             auto& inSector = playerView.get<InSectorComponent>(entity);
@@ -518,12 +467,11 @@ void SectorPhysicsSystem::UpdateSectorCollisions(entt::registry& registry) {
     }
     
     // 如果没有找到目标扇区，或者扇区没有变化，直接返回
-    if (targetSector == entt::null) return;
     if (targetSector == m_ActiveCollisionSector) return;
     
     // 获取扇区名称用于日志
     std::string oldName = "null";
-    std::string newName = "unknown";
+    std::string newName = "space";
     if (m_ActiveCollisionSector != entt::null) {
         auto* oldSector = registry.try_get<SectorComponent>(m_ActiveCollisionSector);
         if (oldSector) oldName = oldSector->name;
@@ -531,7 +479,8 @@ void SectorPhysicsSystem::UpdateSectorCollisions(entt::registry& registry) {
     auto* newSectorComp = registry.try_get<SectorComponent>(targetSector);
     if (newSectorComp) newName = newSectorComp->name;
     
-    std::cout << "[SectorPhysics] Sector collision switch: " << oldName << " -> " << newName << std::endl;
+    DebugManager::GetInstance().Info(
+        "SectorCollision", "Active collision sector: " + oldName + " -> " + newName);
     
     // 第一次初始化：禁用所有扇区碰撞体，除了目标扇区
     if (m_ActiveCollisionSector == entt::null) {
@@ -569,11 +518,14 @@ void SectorPhysicsSystem::SetSectorCollisionEnabled(entt::registry& registry, en
         shapes[i]->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, enabled);
     }
     
-    std::cout << "[SectorPhysics] " << sectorComp->name 
-              << " collision " << (enabled ? "ENABLED" : "DISABLED") << std::endl;
+    std::ostringstream collisionState;
+    collisionState << sectorComp->name << " collision "
+                   << (enabled ? "ENABLED" : "DISABLED")
+                   << " (" << numShapes << " shapes)";
+    DebugManager::GetInstance().Info("SectorCollision", collisionState.str());
 }
 
-void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
+void SectorPhysicsSystem::CheckAndSwitchSectors(float deltaTime, entt::registry& registry) {
     // 检查所有带 InSectorComponent 的实体，根据世界坐标判断是否需要切换扇区
     auto view = registry.view<InSectorComponent, TransformComponent>();
     auto sectorView = registry.view<SectorComponent>();
@@ -583,7 +535,6 @@ void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
     constexpr float EXIT_HYSTERESIS = 1.08f;   // 退出阈值：需要超出 influenceRadius * 1.08
     
     // deltaTime 估计（用于冷却时间）
-    constexpr float deltaTime = 1.0f / 60.0f;
     
     for (auto entity : view) {
         auto& inSector = view.get<InSectorComponent>(entity);
@@ -591,7 +542,7 @@ void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
         
         // 更新冷却时间
         if (inSector.switchCooldown > 0.0f) {
-            inSector.switchCooldown -= deltaTime;
+            inSector.switchCooldown = (std::max)(0.0f, inSector.switchCooldown - deltaTime);
             if (inSector.switchCooldown > 0.0f) {
                 continue;  // 还在冷却中，跳过
             }
@@ -624,7 +575,6 @@ void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
                                                            ENTER_HYSTERESIS, EXIT_HYSTERESIS);
         
         // 如果找不到合适的扇区，保持当前扇区
-        if (bestSector == entt::null) continue;
         
         // 如果扇区发生变化，执行切换
         if (bestSector != inSector.sector) {
@@ -632,7 +582,7 @@ void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
             
             // 获取扇区名称用于日志
             std::string oldName = "null";
-            std::string newName = "unknown";
+            std::string newName = "space";
             if (oldSector != entt::null) {
                 auto* oldSectorComp = registry.try_get<SectorComponent>(oldSector);
                 if (oldSectorComp) oldName = oldSectorComp->name;
@@ -640,8 +590,10 @@ void SectorPhysicsSystem::CheckAndSwitchSectors(entt::registry& registry) {
             auto* newSectorComp = registry.try_get<SectorComponent>(bestSector);
             if (newSectorComp) newName = newSectorComp->name;
             
-            std::cout << "[SectorPhysics] Entity " << static_cast<uint32_t>(entity) 
-                      << " switching sector: " << oldName << " -> " << newName << std::endl;
+            std::ostringstream transition;
+            transition << "Entity " << static_cast<uint32_t>(entity)
+                       << " switching sector: " << oldName << " -> " << newName;
+            DebugManager::GetInstance().Info("SectorTransition", transition.str());
             
             // 转移 PhysX Actor 到新扇区
             TransferPhysXActorToSector(registry, entity, oldSector, bestSector);
@@ -716,8 +668,8 @@ void SectorPhysicsSystem::TransferPhysXActorToSector(entt::registry& registry, e
     if (!inSector || !transform) return;
     
     // 获取新扇区信息
-    auto* newSectorComp = registry.try_get<SectorComponent>(newSector);
-    if (!newSectorComp) return;
+    auto* newSectorComp = (newSector != entt::null) ? registry.try_get<SectorComponent>(newSector) : nullptr;
+    if (newSector != entt::null && !newSectorComp) return;
     
     // 获取旧扇区信息
     auto* oldSectorComp = (oldSector != entt::null) ? registry.try_get<SectorComponent>(oldSector) : nullptr;
@@ -743,16 +695,44 @@ void SectorPhysicsSystem::TransferPhysXActorToSector(entt::registry& registry, e
     }
     
     // 计算新的局部坐标
-    DirectX::XMFLOAT3 newLocalPos = WorldToLocal(worldPos, 
-                                                  newSectorComp->worldPosition,
-                                                  newSectorComp->worldRotation);
+    DirectX::XMFLOAT3 newLocalPos = worldPos;
+    if (newSectorComp) {
+        newLocalPos = WorldToLocal(worldPos,
+                                   newSectorComp->worldPosition,
+                                   newSectorComp->worldRotation);
+    }
     
     // 更新 InSectorComponent 的局部坐标
     inSector->localPosition = newLocalPos;
+
+    if (auto* character = registry.try_get<CharacterControllerComponent>(entity);
+        character && character->pxController) {
+        character->pxController->setPosition(physx::PxExtendedVec3(
+            newLocalPos.x, newLocalPos.y, newLocalPos.z));
+    }
+
+    auto* dynamicActor = (rigidBody && rigidBody->physxActor)
+        ? rigidBody->physxActor->is<physx::PxRigidDynamic>()
+        : nullptr;
+    if (!dynamicActor) {
+        const DirectX::XMFLOAT4 oldSectorRot = oldSectorComp
+            ? oldSectorComp->worldRotation
+            : DirectX::XMFLOAT4{0, 0, 0, 1};
+        const DirectX::XMFLOAT4 newSectorRot = newSectorComp
+            ? newSectorComp->worldRotation
+            : DirectX::XMFLOAT4{0, 0, 0, 1};
+        const DirectX::XMVECTOR worldRotation = DirectX::XMQuaternionMultiply(
+            DirectX::XMLoadFloat4(&inSector->localRotation),
+            DirectX::XMLoadFloat4(&oldSectorRot));
+        DirectX::XMVECTOR newLocalRotation = DirectX::XMQuaternionMultiply(
+            worldRotation,
+            DirectX::XMQuaternionInverse(DirectX::XMLoadFloat4(&newSectorRot)));
+        newLocalRotation = DirectX::XMQuaternionNormalize(newLocalRotation);
+        DirectX::XMStoreFloat4(&inSector->localRotation, newLocalRotation);
+    }
     
     // 如果有 PhysX 刚体，更新其位置
     if (rigidBody && rigidBody->physxActor) {
-        auto* dynamicActor = rigidBody->physxActor->is<physx::PxRigidDynamic>();
         if (dynamicActor) {
             // 获取当前速度（相对于旧扇区的局部速度）
             physx::PxVec3 currentVel = dynamicActor->getLinearVelocity();
@@ -761,9 +741,13 @@ void SectorPhysicsSystem::TransferPhysXActorToSector(entt::registry& registry, e
             
             // 计算扇区速度差
             DirectX::XMFLOAT3 oldSectorVel = oldSectorComp ? oldSectorComp->worldVelocity : DirectX::XMFLOAT3{0,0,0};
-            DirectX::XMFLOAT3 newSectorVel = newSectorComp->worldVelocity;
+            DirectX::XMFLOAT3 newSectorVel = newSectorComp
+                ? newSectorComp->worldVelocity
+                : DirectX::XMFLOAT3{0, 0, 0};
             DirectX::XMFLOAT4 oldSectorRot = oldSectorComp ? oldSectorComp->worldRotation : DirectX::XMFLOAT4{0,0,0,1};
-            DirectX::XMFLOAT4 newSectorRot = newSectorComp->worldRotation;
+            DirectX::XMFLOAT4 newSectorRot = newSectorComp
+                ? newSectorComp->worldRotation
+                : DirectX::XMFLOAT4{0, 0, 0, 1};
             
             // ====== 旋转转换 ======
             // 旧局部旋转 -> 世界旋转 -> 新局部旋转
@@ -797,24 +781,31 @@ void SectorPhysicsSystem::TransferPhysXActorToSector(entt::registry& registry, e
             // 旧扇区局部速度 -> 世界速度（旋转）
             DirectX::XMVECTOR oldRotQuat = DirectX::XMLoadFloat4(&oldSectorRot);
             DirectX::XMVECTOR worldVelVec = DirectX::XMVector3Rotate(localVelVec, oldRotQuat);
+            worldVelVec = DirectX::XMVectorAdd(worldVelVec, DirectX::XMLoadFloat3(&oldSectorVel));
             
             // 世界速度 -> 新扇区局部速度（逆旋转）
             DirectX::XMVECTOR newRotQuat = DirectX::XMLoadFloat4(&newSectorRot);
             DirectX::XMVECTOR invNewRotQuat = DirectX::XMQuaternionInverse(newRotQuat);
+            worldVelVec = DirectX::XMVectorSubtract(worldVelVec, DirectX::XMLoadFloat3(&newSectorVel));
             DirectX::XMVECTOR newLocalVelVec = DirectX::XMVector3Rotate(worldVelVec, invNewRotQuat);
             
             DirectX::XMFLOAT3 newLocalVel;
             DirectX::XMStoreFloat3(&newLocalVel, newLocalVelVec);
             
             physx::PxVec3 newLinearVel(newLocalVel.x, newLocalVel.y, newLocalVel.z);
+            DirectX::XMFLOAT3 localAngularVel = { angularVel.x, angularVel.y, angularVel.z };
+            DirectX::XMVECTOR worldAngularVel = DirectX::XMVector3Rotate(
+                DirectX::XMLoadFloat3(&localAngularVel), oldRotQuat);
+            DirectX::XMVECTOR newLocalAngularVelVec = DirectX::XMVector3Rotate(
+                worldAngularVel, invNewRotQuat);
+            DirectX::XMFLOAT3 newLocalAngularVel;
+            DirectX::XMStoreFloat3(&newLocalAngularVel, newLocalAngularVelVec);
             
             // 调试输出（使用已有的 oldSectorVel 和 newSectorVel）
-            std::cout << "[VELOCITY DEBUG - SIMPLE] oldLocalVel=(" << currentVel.x << "," << currentVel.y << "," << currentVel.z << ")"
-                      << " -> newLocalVel=(" << newLinearVel.x << "," << newLinearVel.y << "," << newLinearVel.z << ")"
-                      << " | oldSectorVel=(" << oldSectorVel.x << "," << oldSectorVel.y << "," << oldSectorVel.z << ")"
-                      << " newSectorVel=(" << newSectorVel.x << "," << newSectorVel.y << "," << newSectorVel.z << ")"
-                      << " (sector vel ignored)"
-                      << std::endl;
+            std::ostringstream velocityTransition;
+            velocityTransition << "Velocity frame change: local speed " << currentVel.magnitude()
+                               << " -> " << newLinearVel.magnitude();
+            DebugManager::GetInstance().Info("SectorTransition", velocityTransition.str());
             
             // 设置新的位置和旋转
             physx::PxTransform newPose(
@@ -825,11 +816,12 @@ void SectorPhysicsSystem::TransferPhysXActorToSector(entt::registry& registry, e
             
             // 直接设置速度（无渐进过渡）
             dynamicActor->setLinearVelocity(newLinearVel);
-            dynamicActor->setAngularVelocity(angularVel);
+            dynamicActor->setAngularVelocity(physx::PxVec3(
+                newLocalAngularVel.x, newLocalAngularVel.y, newLocalAngularVel.z));
             
             dynamicActor->wakeUp();
             
-            std::cout << "[SectorPhysics] Sector transfer complete (simple velocity)" << std::endl;
+            DebugManager::GetInstance().Info("SectorTransition", "Coordinate frame transfer complete");
         }
     }
 }
@@ -904,65 +896,6 @@ void SectorPhysicsSystem::PrintCurrentSectorInfo(entt::registry& registry) {
     }
     
     std::cout << "======================================================\n" << std::endl;
-}
-
-void SectorPhysicsSystem::ApplyVelocityCompensation(float deltaTime, entt::registry& registry) {
-    // 对所有有速度补偿的实体应用渐进式补偿
-    auto view = registry.view<InSectorComponent, RigidBodyComponent>();
-    
-    for (auto entity : view) {
-        auto& inSector = view.get<InSectorComponent>(entity);
-        auto& rigidBody = view.get<RigidBodyComponent>(entity);
-        
-        // 如果没有过渡进行中，跳过
-        if (inSector.transitionProgress <= 0.0f) continue;
-        
-        // 计算补偿衰减率（使用指数衰减让开始快结束慢）
-        // transitionProgress 从 1.0 衰减到 0.0
-        float decayRate = 5.0f;  // 越大衰减越快
-        float compensationFactor = decayRate * deltaTime;
-        
-        // 如果有 PhysX 刚体，应用速度补偿
-        if (rigidBody.physxActor) {
-            auto* dynamicActor = rigidBody.physxActor->is<physx::PxRigidDynamic>();
-            if (dynamicActor && !dynamicActor->isSleeping()) {
-                // 计算本帧的补偿量
-                float compX = inSector.velocityCompensation.x * compensationFactor;
-                float compY = inSector.velocityCompensation.y * compensationFactor;
-                float compZ = inSector.velocityCompensation.z * compensationFactor;
-                
-                // 应用补偿
-                physx::PxVec3 currentVel = dynamicActor->getLinearVelocity();
-                dynamicActor->setLinearVelocity(physx::PxVec3(
-                    currentVel.x + compX,
-                    currentVel.y + compY,
-                    currentVel.z + compZ
-                ));
-                
-                // 减少剩余补偿量
-                inSector.velocityCompensation.x -= compX;
-                inSector.velocityCompensation.y -= compY;
-                inSector.velocityCompensation.z -= compZ;
-            }
-        }
-        
-        // 更新过渡进度
-        inSector.transitionProgress -= compensationFactor;
-        if (inSector.transitionProgress < 0.0f) {
-            inSector.transitionProgress = 0.0f;
-        }
-        
-        // 如果剩余补偿量很小，直接清零完成过渡
-        float remainingComp = std::sqrt(
-            inSector.velocityCompensation.x * inSector.velocityCompensation.x +
-            inSector.velocityCompensation.y * inSector.velocityCompensation.y +
-            inSector.velocityCompensation.z * inSector.velocityCompensation.z
-        );
-        if (remainingComp < 0.1f || inSector.transitionProgress <= 0.0f) {
-            inSector.velocityCompensation = { 0.0f, 0.0f, 0.0f };
-            inSector.transitionProgress = 0.0f;
-        }
-    }
 }
 
 } // namespace outer_wilds

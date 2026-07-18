@@ -1,0 +1,28 @@
+# Paths are relative to the repository root.
+# Keep this list limited to files needed by the current startup scene.
+assets/models/sun/sun_final.glb
+assets/models/mercury/Mercury.obj
+assets/models/mercury/Mercury.jpg
+assets/models/venus/Venus.obj
+assets/models/venus/Venus.jpg
+assets/BlendObj/earth/earth_final.glb
+assets/models/mars/Mars.obj
+assets/models/mars/InShot_20250116_121259944.jpg
+assets/models/jupiter/Jupiter.obj
+assets/models/jupiter/Jupiter.jpg
+assets/models/saturn/saturn_planet.glb
+assets/models/neptune/Neptune.obj
+assets/models/neptune/Neptune.jpg
+assets/models/moon/lunar_artifacts_globe.glb
+assets/models/human/extracted/models/SK_SciFiTrooperManV3.fbx
+assets/models/human/extracted/models/T_SciFiTrooperV3_bottom_a.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_bottom_emissive.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_bottom_n.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_bottom_RGBA.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_top_a.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_top_emissive.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_top_n.png
+assets/models/human/extracted/models/T_SciFiTrooperV3_top_RGBA.png
+assets/models/spacecraft/base_basic_pbr.fbx
+assets/models/spacecraft/texture_diffuse_00.png
+assets/ui/kkstudio1.jpg

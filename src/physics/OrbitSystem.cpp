@@ -126,7 +126,7 @@ void OrbitSystem::UpdateRotations(float deltaTime, entt::registry& registry) {
         
         // 更新 SectorComponent 的旋转（如果存在）
         auto* sector = registry.try_get<SectorComponent>(entity);
-        if (sector) {
+        if (sector && sector->rotatesWithBody) {
             // 围绕自转轴旋转
             DirectX::XMVECTOR axis = DirectX::XMLoadFloat3(&orbit.rotationAxis);
             axis = DirectX::XMVector3Normalize(axis);

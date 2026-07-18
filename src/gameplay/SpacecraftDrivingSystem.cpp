@@ -16,7 +16,9 @@
 #include "components/SpacecraftComponent.h"
 #include "../scene/components/TransformComponent.h"
 #include "../physics/components/RigidBodyComponent.h"
+#include "../physics/components/GravityAffectedComponent.h"
 #include "../physics/components/SectorComponent.h"
+#include "../physics/PhysXManager.h"
 #include "../graphics/components/CameraComponent.h"
 #include "../graphics/components/FreeCameraComponent.h"
 #include "../input/InputManager.h"
@@ -43,6 +45,10 @@ void SpacecraftDrivingSystem::Initialize(std::shared_ptr<Scene> scene) {
 void SpacecraftDrivingSystem::Update(float deltaTime, entt::registry& registry) {
     ProcessSpacecraftInput(registry);
     ApplySpacecraftForces(deltaTime, registry);
+    ApplyLandingAssist(deltaTime, registry);
+}
+
+void SpacecraftDrivingSystem::PostPhysicsUpdate(float deltaTime, entt::registry& registry) {
     UpdateSpacecraftState(registry);
     UpdateSpacecraftCamera(deltaTime, registry);
 }
@@ -104,36 +110,13 @@ void SpacecraftDrivingSystem::ProcessSpacecraftInput(entt::registry& registry) {
         // 鼠标控制俯仰/偏航（仅在开启鼠标视角时生效）
         const auto& playerInput = InputManager::GetInstance().GetPlayerInput();
         if (playerInput.mouseLookEnabled) {
-            // 基础缩放：先把像素位移压到一个统一区间
-            const float mouseScale = 1.0f / 320.0f;
-            float mx = playerInput.lookInput.x * mouseScale;
-            float my = playerInput.lookInput.y * mouseScale;
-
-            // 径向死区：对 (mx, my) 的长度做死区处理，斜向移动更平滑
-            float len = std::sqrt(mx * mx + my * my);
-            const float deadZone = 0.02f; // 更小的阈值，让俯仰更容易触发
-            if (len <= deadZone) {
-                mx = 0.0f;
-                my = 0.0f;
-            } else {
-                // 将 [deadZone, 1] 映射到 [0, 1]
-                float clampedLen = (len < 1.0f) ? len : 1.0f;
-                float newLen = (clampedLen - deadZone) / (1.0f - deadZone);
-                float invLen = 1.0f / len;
-                mx = mx * invLen * newLen;
-                my = my * invLen * newLen;
-            }
-
-            // 为鼠标单独提供俯仰/偏航增益系数
-            const float mouseYawGain = 1.5f;   // 再次削弱偏航
-            const float mousePitchGain = 40.0f; // 大幅增强俯仰，考虑到玩家纵向移动更少
-            mx *= mouseYawGain;
-            my *= mousePitchGain;
-
-            // 最终映射到输入，保持 [-1, 1]
-            yaw += std::clamp(mx, -1.0f, 1.0f);
-            pitch += std::clamp(my, -1.0f, 1.0f);
+            constexpr float mouseSensitivity = 0.045f;
+            yaw += std::clamp(playerInput.lookInput.x * mouseSensitivity, -1.0f, 1.0f);
+            pitch += std::clamp(playerInput.lookInput.y * mouseSensitivity, -1.0f, 1.0f);
         }
+
+        DebugManager::GetInstance().SetMetric("Mouse look X", playerInput.lookInput.x, "px");
+        DebugManager::GetInstance().SetMetric("Mouse look Y", playerInput.lookInput.y, "px");
         
         // 更新组件输入值（可以添加平滑处理）
         spacecraft.inputForward = forward;
@@ -255,7 +238,9 @@ void SpacecraftDrivingSystem::ApplySpacecraftForces(float deltaTime, entt::regis
         XMFLOAT3 torque;
         XMStoreFloat3(&torque, totalTorque);
         if (std::abs(torque.x) > 0.001f || std::abs(torque.y) > 0.001f || std::abs(torque.z) > 0.001f) {
-            dynamicActor->addTorque(physx::PxVec3(torque.x, torque.y, torque.z), physx::PxForceMode::eFORCE);
+            dynamicActor->addTorque(
+                physx::PxVec3(torque.x, torque.y, torque.z),
+                physx::PxForceMode::eACCELERATION);
         }
         
         // === 调试输出 ===
@@ -265,13 +250,115 @@ void SpacecraftDrivingSystem::ApplySpacecraftForces(float deltaTime, entt::regis
             physx::PxVec3 vel = dynamicActor->getLinearVelocity();
             physx::PxVec3 angVel = dynamicActor->getAngularVelocity();
             
-            char debugMsg[256];
-            snprintf(debugMsg, sizeof(debugMsg), 
-                "Input: F=%.1f S=%.1f V=%.1f | R=%.1f P=%.1f Y=%.1f | Vel: %.1f, %.1f, %.1f",
-                spacecraft.inputForward, spacecraft.inputStrafe, spacecraft.inputVertical,
-                spacecraft.inputRoll, spacecraft.inputPitch, spacecraft.inputYaw,
-                vel.x, vel.y, vel.z);
-            DebugManager::GetInstance().Log("Spacecraft", debugMsg);
+            auto& diagnostics = DebugManager::GetInstance();
+            diagnostics.SetMetric("Spacecraft speed", vel.magnitude(), "m/s");
+            diagnostics.SetMetric("Spacecraft angular speed", angVel.magnitude(), "rad/s");
+            diagnostics.SetMetric("Spacecraft input forward", spacecraft.inputForward);
+            diagnostics.SetMetric("Spacecraft input strafe", spacecraft.inputStrafe);
+            diagnostics.SetMetric("Spacecraft input vertical", spacecraft.inputVertical);
+            diagnostics.SetMetric("Spacecraft input roll", spacecraft.inputRoll);
+            diagnostics.SetMetric("Spacecraft input pitch", spacecraft.inputPitch);
+            diagnostics.SetMetric("Spacecraft input yaw", spacecraft.inputYaw);
+        }
+    }
+}
+
+void SpacecraftDrivingSystem::ApplyLandingAssist(float deltaTime, entt::registry& registry) {
+    auto view = registry.view<SpacecraftComponent, RigidBodyComponent, GravityAffectedComponent>();
+
+    for (auto entity : view) {
+        auto& spacecraft = view.get<SpacecraftComponent>(entity);
+        auto& rigidBody = view.get<RigidBodyComponent>(entity);
+        const auto& gravity = view.get<GravityAffectedComponent>(entity);
+
+        auto* actor = rigidBody.physxActor
+            ? rigidBody.physxActor->is<physx::PxRigidDynamic>()
+            : nullptr;
+        if (!actor) continue;
+
+        ActorContactState contact;
+        const bool touching = PhysXManager::GetInstance().GetActorContactState(actor, contact);
+        if (!touching) {
+            if (!actor->isSleeping()) spacecraft.isGrounded = false;
+            spacecraft.landingContactTime = 0.0f;
+            spacecraft.landingAssistActive = false;
+            spacecraft.landingSettledLogged = false;
+            continue;
+        }
+
+        spacecraft.isGrounded = true;
+        spacecraft.landingContactTime += deltaTime;
+        if (!spacecraft.landingAssistEnabled || actor->isSleeping()) continue;
+
+        physx::PxVec3 normal = contact.normal;
+        if (normal.magnitudeSquared() < 0.25f) continue;
+        normal.normalize();
+
+        const physx::PxVec3 outward(
+            -gravity.currentGravityDir.x,
+            -gravity.currentGravityDir.y,
+            -gravity.currentGravityDir.z);
+        if (outward.magnitudeSquared() > 0.25f && normal.dot(outward) < 0.0f) {
+            normal = -normal;
+        }
+
+        const physx::PxVec3 velocity = actor->getLinearVelocity();
+        const physx::PxVec3 angularVelocity = actor->getAngularVelocity();
+        const float speed = velocity.magnitude();
+        const float angularSpeed = angularVelocity.magnitude();
+
+        auto& diagnostics = DebugManager::GetInstance();
+        diagnostics.SetMetric("Landing contact time", spacecraft.landingContactTime, "s");
+        diagnostics.SetMetric("Landing contact speed", speed, "m/s");
+
+        if (speed > spacecraft.landingAssistMaxSpeed) {
+            spacecraft.landingAssistActive = false;
+            continue;
+        }
+
+        if (!spacecraft.landingAssistActive) {
+            spacecraft.landingAssistActive = true;
+            diagnostics.Info("LandingAssist", "Contact stabilized; landing assist engaged");
+        }
+
+        const bool translationInput =
+            std::abs(spacecraft.inputForward) > 0.05f ||
+            std::abs(spacecraft.inputStrafe) > 0.05f ||
+            std::abs(spacecraft.inputVertical) > 0.05f;
+        const bool rotationInput =
+            std::abs(spacecraft.inputRoll) > 0.05f ||
+            std::abs(spacecraft.inputPitch) > 0.05f ||
+            std::abs(spacecraft.inputYaw) > 0.05f;
+
+        if (!translationInput) {
+            const physx::PxVec3 tangentVelocity = velocity - normal * velocity.dot(normal);
+            physx::PxVec3 dampingAcceleration = tangentVelocity * -4.0f;
+            const float dampingMagnitude = dampingAcceleration.magnitude();
+            if (dampingMagnitude > 15.0f) {
+                dampingAcceleration *= 15.0f / dampingMagnitude;
+            }
+            actor->addForce(dampingAcceleration, physx::PxForceMode::eACCELERATION);
+        }
+
+        if (!rotationInput) {
+            const physx::PxVec3 shipUp = actor->getGlobalPose().q.rotate(physx::PxVec3(0.0f, 1.0f, 0.0f));
+            physx::PxVec3 angularAcceleration = shipUp.cross(normal) * 8.0f - angularVelocity * 4.0f;
+            const float accelerationMagnitude = angularAcceleration.magnitude();
+            if (accelerationMagnitude > 10.0f) {
+                angularAcceleration *= 10.0f / accelerationMagnitude;
+            }
+            actor->addTorque(angularAcceleration, physx::PxForceMode::eACCELERATION);
+        }
+
+        if (!translationInput && !rotationInput &&
+            spacecraft.landingContactTime >= spacecraft.landingSettleTime &&
+            speed < 0.08f && angularSpeed < 0.05f) {
+            actor->putToSleep();
+            spacecraft.landingAssistActive = false;
+            if (!spacecraft.landingSettledLogged) {
+                diagnostics.Info("LandingAssist", "Spacecraft settled and entered sleep");
+                spacecraft.landingSettledLogged = true;
+            }
         }
     }
 }

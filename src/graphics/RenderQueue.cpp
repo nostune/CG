@@ -221,7 +221,7 @@ void RenderQueue::CollectFromECS(entt::registry& registry, const XMFLOAT3& camer
         // 为每个子 mesh 创建 batch
         for (size_t i = 0; i < multiMesh.meshes.size(); i++) {
             auto& mesh = multiMesh.meshes[i];
-            auto& material = (i < multiMesh.materials.size()) ? multiMesh.materials[i] : nullptr;
+            auto material = (i < multiMesh.materials.size()) ? multiMesh.materials[i] : nullptr;
             
             if (!mesh || !mesh->vertexBuffer) continue;
             

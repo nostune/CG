@@ -30,6 +30,7 @@ public:
     void Initialize() override;
     void Initialize(std::shared_ptr<Scene> scene);
     void Update(float deltaTime, entt::registry& registry) override;
+    void PostPhysicsUpdate(float deltaTime, entt::registry& registry);
     void Shutdown() override;
 
 private:
@@ -44,6 +45,7 @@ private:
      * 根据输入状态，向 PhysX 刚体施加力和力矩
      */
     void ApplySpacecraftForces(float deltaTime, entt::registry& registry);
+    void ApplyLandingAssist(float deltaTime, entt::registry& registry);
     
     /**
      * 获取飞船局部坐标系方向向量

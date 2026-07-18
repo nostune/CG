@@ -6,6 +6,8 @@
 
 namespace outer_wilds {
 
+class PhysXDebugRenderer;
+
 // UI组件 - 标记实体有UI元素
 struct UIComponent {
     bool visible = true;
@@ -37,8 +39,16 @@ public:
     bool IsWaitingForKeyPress() const { return m_WaitingForKeyPress; }
     bool WasKeyPressed() const { return m_KeyPressed; }
 
+    void SetDiagnosticsVisible(bool visible) { m_ShowDiagnostics = visible; }
+    bool IsDiagnosticsVisible() const { return m_ShowDiagnostics; }
+
 private:
     void RenderWelcomeScreen();
+    void RenderDiagnosticsPanel();
+    void RenderDiagnosticsOverview();
+    void RenderDiagnosticsLogs();
+    void RenderDiagnosticsPhysics();
+    void RenderPhysXSpaceWindow();
     bool LoadTextureFromFile(const std::string& filename, ID3D11ShaderResourceView** outSRV, int* outWidth, int* outHeight);
 
     ID3D11Device* m_Device = nullptr;
@@ -58,6 +68,13 @@ private:
     bool m_KeyPressed = false;
 
     bool m_ImGuiInitialized = false;
+    bool m_ShowDiagnostics = false;
+    bool m_LogAutoScroll = true;
+    int m_LogLevelFilter = 0;
+    char m_LogTextFilter[128] = {};
+    std::string m_ImGuiIniPath;
+    std::unique_ptr<PhysXDebugRenderer> m_PhysXDebugRenderer;
+    bool m_ShowPhysXSpace = false;
 };
 
 } // namespace outer_wilds

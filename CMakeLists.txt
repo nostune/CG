@@ -1,74 +1,84 @@
-cmake_minimum_required(VERSION 3.15)
-project(OuterWildsECS LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.25)
 
-# Use vcpkg toolchain by passing -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+project(OuterWildsECS VERSION 0.2.0 LANGUAGES CXX)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Add /FS flag for MSVC to avoid PDB conflicts
-# Add /utf-8 flag to tell MSVC to treat source files as UTF-8
-if(MSVC)
-    add_compile_options(/FS /utf-8)
-endif()
+option(OUTERWILDS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
-# Collect sources
-file(GLOB_RECURSE SRC_FILES
-    "${CMAKE_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/*.c"
-    "${CMAKE_SOURCE_DIR}/src/*.h"
-    "${CMAKE_SOURCE_DIR}/src/core/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/*.h"
-    "${CMAKE_SOURCE_DIR}/src/gameplay/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/gameplay/*.h"
-    "${CMAKE_SOURCE_DIR}/src/physics/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/physics/*.h"
-    "${CMAKE_SOURCE_DIR}/src/graphics/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/graphics/*.h"
-    "${CMAKE_SOURCE_DIR}/src/input/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/input/*.h"
-    "${CMAKE_SOURCE_DIR}/src/physics/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/physics/*.h"
-    "${CMAKE_SOURCE_DIR}/src/scene/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/scene/*.h"
+file(GLOB_RECURSE OUTERWILDS_ENGINE_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+)
+list(REMOVE_ITEM OUTERWILDS_ENGINE_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
 )
 
-add_executable(OuterWildsECS ${SRC_FILES})
+add_library(OuterWildsEngine STATIC ${OUTERWILDS_ENGINE_SOURCES})
+add_library(OuterWilds::Engine ALIAS OuterWildsEngine)
 
-target_include_directories(OuterWildsECS PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(OuterWildsEngine
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 
-# Find EnTT (header-only)
 find_package(EnTT CONFIG REQUIRED)
-target_link_libraries(OuterWildsECS PRIVATE EnTT::EnTT)
-
-# Find PhysX (vcpkg provides it as unofficial-omniverse-physx-sdk)
 find_package(unofficial-omniverse-physx-sdk CONFIG REQUIRED)
-target_link_libraries(OuterWildsECS PRIVATE unofficial::omniverse-physx-sdk::sdk)
-
-# Find Assimp
 find_package(assimp CONFIG REQUIRED)
-target_link_libraries(OuterWildsECS PRIVATE assimp::assimp)
-
-# Find ImGui
 find_package(imgui CONFIG REQUIRED)
-target_link_libraries(OuterWildsECS PRIVATE imgui::imgui)
+find_path(MINIMP3_INCLUDE_DIRS NAMES minimp3/minimp3.h REQUIRED)
+find_path(STB_INCLUDE_DIRS NAMES stb_image.h REQUIRED)
 
-# Find minimp3 (header-only)
-find_path(MINIMP3_INCLUDE_DIRS "minimp3/minimp3.h")
-target_include_directories(OuterWildsECS PRIVATE ${MINIMP3_INCLUDE_DIRS})
+target_include_directories(OuterWildsEngine
+    PRIVATE
+        ${MINIMP3_INCLUDE_DIRS}
+        ${STB_INCLUDE_DIRS}
+)
 
-# Find stb (header-only for image loading)
-find_path(STB_INCLUDE_DIRS "stb_image.h")
-target_include_directories(OuterWildsECS PRIVATE ${STB_INCLUDE_DIRS})
+target_link_libraries(OuterWildsEngine
+    PUBLIC
+        EnTT::EnTT
+        unofficial::omniverse-physx-sdk::sdk
+        assimp::assimp
+        imgui::imgui
+)
 
-# Add Windows libraries and compiler flags
 if(WIN32)
-    target_link_libraries(OuterWildsECS PRIVATE d3d11 dxgi d3dcompiler xaudio2)
-    # Add /FS flag for MSVC to allow multiple CL.EXE to write to the same PDB file
-    if(MSVC)
-        target_compile_options(OuterWildsECS PRIVATE /FS)
-        # Set console subsystem for main() entry point (allows console output)
-        set_target_properties(OuterWildsECS PROPERTIES
-            LINK_FLAGS "/SUBSYSTEM:CONSOLE"
-        )
+    target_compile_definitions(OuterWildsEngine
+        PUBLIC
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(OuterWildsEngine
+        PUBLIC
+            d3d11
+            dxgi
+            d3dcompiler
+            xaudio2
+    )
+endif()
+
+if(MSVC)
+    target_compile_options(OuterWildsEngine PRIVATE /FS /utf-8 /W4 /permissive-)
+    if(OUTERWILDS_WARNINGS_AS_ERRORS)
+        target_compile_options(OuterWildsEngine PRIVATE /WX)
     endif()
 endif()
+
+add_executable(OuterWildsECS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+target_link_libraries(OuterWildsECS PRIVATE OuterWilds::Engine)
+
+if(MSVC)
+    target_compile_options(OuterWildsECS PRIVATE /FS /utf-8 /W4 /permissive-)
+    if(OUTERWILDS_WARNINGS_AS_ERRORS)
+        target_compile_options(OuterWildsECS PRIVATE /WX)
+    endif()
+endif()
+
+set_target_properties(OuterWildsECS PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source" FILES ${OUTERWILDS_ENGINE_SOURCES})

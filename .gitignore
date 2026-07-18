@@ -1,10 +1,13 @@
 # Build directories
 build/
 build2/
-Debug/
-Release/
-x64/
+out/
+saved/
+/Debug/
+/Release/
+/x64/
 .vs/
+CMakeUserPresets.json
 
 # Visual Studio files
 *.vcxproj

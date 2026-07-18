@@ -10,6 +10,8 @@
 
 #include "core/Engine.h"
 #include "core/DebugManager.h"
+#include "core/ProjectPaths.h"
+#include "core/TimeManager.h"
 #include "audio/AudioSystem.h"
 #include "ui/UISystem.h"
 #include "scene/Scene.h"
@@ -53,6 +55,7 @@
 #include <iostream>
 #include <sstream>
 #include <DbgHelp.h>
+#include <algorithm>
 
 #pragma comment(lib, "DbgHelp.lib")
 
@@ -90,6 +93,12 @@ void CreateDebugConsole() {
         std::cerr.clear();
         std::cin.clear();
     }
+}
+
+bool HasCommandLineArgument(int argc, char* argv[], const std::string& argument) {
+    return std::any_of(argv + 1, argv + argc, [&argument](const char* value) {
+        return value != nullptr && argument == value;
+    });
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -133,10 +142,50 @@ HWND CreateAppWindow(HINSTANCE hInstance, int width, int height) {
 
 int main(int argc, char* argv[]) {
     SetUnhandledExceptionFilter(CrashHandler);
-    CreateDebugConsole();
+
+    const bool consoleEnabled = HasCommandLineArgument(argc, argv, "--console");
+    const bool diagnosticsSmoke = HasCommandLineArgument(argc, argv, "--diagnostics-smoke");
+    const bool sectorTransitionSmoke = HasCommandLineArgument(argc, argv, "--sector-transition-smoke");
+    const bool moonTransitionSmoke = HasCommandLineArgument(argc, argv, "--moon-transition-smoke");
+    const bool saturnCollisionSmoke = HasCommandLineArgument(argc, argv, "--saturn-collision-smoke");
+    const bool marsCollisionSmoke = HasCommandLineArgument(argc, argv, "--mars-collision-smoke");
+    const bool landingSmoke = HasCommandLineArgument(argc, argv, "--landing-smoke");
+    const bool sectorSmoke = sectorTransitionSmoke || moonTransitionSmoke ||
+        saturnCollisionSmoke || marsCollisionSmoke;
+    const bool hiddenWindow = HasCommandLineArgument(argc, argv, "--hidden") ||
+        diagnosticsSmoke || sectorSmoke || landingSmoke;
+    const bool skipWelcome = HasCommandLineArgument(argc, argv, "--skip-welcome") ||
+        diagnosticsSmoke || sectorSmoke || landingSmoke;
+    if (diagnosticsSmoke || HasCommandLineArgument(argc, argv, "--physx-debug")) {
+        SetEnvironmentVariableA("OUTERWILDS_PHYSX_DEBUG_VIEW", "1");
+    }
+    if (HasCommandLineArgument(argc, argv, "--pvd")) {
+        SetEnvironmentVariableA("OUTERWILDS_PVD", "1");
+    }
+    if (landingSmoke || marsCollisionSmoke) {
+        SetEnvironmentVariableA("OUTERWILDS_CONTACT_DEBUG", "1");
+    }
+    if (consoleEnabled) {
+        CreateDebugConsole();
+    }
+
+    try {
+        outer_wilds::ProjectPaths::Initialize(argc > 0 ? argv[0] : nullptr);
+        std::filesystem::current_path(outer_wilds::ProjectPaths::Root());
+    } catch (const std::exception& e) {
+        std::cerr << "[Startup] " << e.what() << std::endl;
+        return 1;
+    }
+
+    auto& diagnostics = outer_wilds::DebugManager::GetInstance();
+    diagnostics.SetConsoleEnabled(consoleEnabled);
+    if (!diagnostics.Initialize(outer_wilds::ProjectPaths::Root() / "logs")) {
+        std::cerr << "[Startup] Unable to create the session log" << std::endl;
+    }
     
     std::cout << "[Main] Application starting..." << std::endl;
-    outer_wilds::DebugManager::GetInstance().Log("Main", "Debug Console Initialized.");
+    std::cout << "[Main] Project root: " << outer_wilds::ProjectPaths::Root().string() << std::endl;
+    diagnostics.Info("Main", consoleEnabled ? "Debug console enabled" : "Debug console disabled");
 
     const int WINDOW_WIDTH = 1280;
     const int WINDOW_HEIGHT = 720;
@@ -148,12 +197,24 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    ShowWindow(hwnd, SW_SHOW);
-    UpdateWindow(hwnd);
-    SetForegroundWindow(hwnd);
+    if (!hiddenWindow) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
+    }
 
     // Initialize engine
     outer_wilds::Engine& engine = outer_wilds::Engine::GetInstance();
+    if (landingSmoke) {
+        engine.SetAutoStopAfterSeconds(8.0f);
+        diagnostics.Info("LandingTest", "Automated high-speed landing smoke mode enabled");
+    } else if (diagnosticsSmoke) {
+        engine.SetAutoStopAfterSeconds(3.0f);
+        diagnostics.Info("Diagnostics", "Automated smoke mode enabled");
+    } else if (sectorSmoke) {
+        engine.SetAutoStopAfterSeconds(marsCollisionSmoke ? 3.0f : 1.0f);
+        diagnostics.Info("SectorTransition", "Automated sector transition smoke mode enabled");
+    }
     
     if (engine.Initialize(hwnd, WINDOW_WIDTH, WINDOW_HEIGHT)) {
         outer_wilds::DebugManager::GetInstance().Log("Main", "Engine initialized successfully");
@@ -180,7 +241,7 @@ int main(int argc, char* argv[]) {
         std::cout << "[Scene] Global gravity disabled (managed by SectorPhysicsSystem)" << std::endl;
         
         // 使用太阳系构建器创建所有天体
-        const std::string ASSETS_BASE = "C:\\Users\\kkakk\\homework\\OuterWilds";
+        const std::string ASSETS_BASE = outer_wilds::ProjectPaths::Root().string();
         auto solarSystem = outer_wilds::SolarSystemBuilder::Build(
             scene->GetRegistry(), scene, device, ASSETS_BASE
         );
@@ -217,7 +278,7 @@ int main(int argc, char* argv[]) {
         // 使用多材质加载器支持 FBX 模型
         auto playerEntity = outer_wilds::SceneAssetLoader::LoadMultiMaterialModelAsEntities(
             scene->GetRegistry(), scene, device,
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\human\\extracted\\models\\SK_SciFiTrooperManV3.fbx",
+            outer_wilds::ProjectPaths::Asset("models/human/extracted/models/SK_SciFiTrooperManV3.fbx").string(),
             "",  // 贴图和模型在同一目录
             DirectX::XMFLOAT3(0.0f, PLAYER_LOCAL_HEIGHT, 0.0f),  // 局部坐标
             DirectX::XMFLOAT3(0.01f, 0.01f, 0.01f)  // FBX 模型通常需要缩小
@@ -370,8 +431,8 @@ int main(int argc, char* argv[]) {
         
         auto spacecraftEntity = outer_wilds::SceneAssetLoader::LoadModelAsEntityWithOptions(
             scene->GetRegistry(), scene, device,
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\spacecraft\\base_basic_pbr.fbx",
-            "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\models\\spacecraft\\texture_diffuse_00.png",
+            outer_wilds::ProjectPaths::Asset("models/spacecraft/base_basic_pbr.fbx").string(),
+            outer_wilds::ProjectPaths::Asset("models/spacecraft/texture_diffuse_00.png").string(),
             DirectX::XMFLOAT3(SPACECRAFT_LOCAL_X_OFFSET, SPACECRAFT_LOCAL_HEIGHT, 0.0f),  // 局部坐标
             DirectX::XMFLOAT3(SPACECRAFT_SCALE, SPACECRAFT_SCALE, SPACECRAFT_SCALE),
             spacecraftLoadOptions
@@ -473,6 +534,7 @@ int main(int argc, char* argv[]) {
                 pxRotation
             );
             physx::PxRigidDynamic* spacecraftActor = pxPhysics->createRigidDynamic(spacecraftPose);
+            spacecraftActor->setName("Spacecraft");
             
             // 使用盒子作为飞船碰撞形状
             physx::PxShape* spacecraftShape = physx::PxRigidActorExt::createExclusiveShape(
@@ -482,9 +544,12 @@ int main(int argc, char* argv[]) {
             );
             spacecraftShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, true);
             spacecraftShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
+            spacecraftShape->setContactOffset(0.05f);
+            spacecraftShape->setRestOffset(0.0f);
             
-            physx::PxRigidBodyExt::updateMassAndInertia(*spacecraftActor, 1.0f);
-            spacecraftActor->setMass(rigidBody.mass);
+            physx::PxRigidBodyExt::setMassAndUpdateInertia(*spacecraftActor, rigidBody.mass);
+            spacecraftActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
+            spacecraftActor->setMaxDepenetrationVelocity(20.0f);
             // 【物理参数】适当的阻尼，既能在太空保持漂移，又能在接触地面时快速稳定
             spacecraftActor->setLinearDamping(0.2f);   // 轻微线性阻尼，减少地面碰撞后的滑动颤抖
             spacecraftActor->setAngularDamping(2.0f);  // 提高角阻尼，抑制旋转抖动
@@ -498,6 +563,70 @@ int main(int argc, char* argv[]) {
             pxScene->addActor(*spacecraftActor);
             spacecraftActor->wakeUp();
             rigidBody.physxActor = spacecraftActor;
+
+            if (landingSmoke) {
+                const DirectX::XMFLOAT3 testPosition = {0.0f, PLANET_RADIUS + 18.0f, 0.0f};
+                const DirectX::XMFLOAT4 testRotation = {0.0f, 0.0f, 0.0f, 1.0f};
+                spacecraftActor->setGlobalPose(physx::PxTransform(
+                    physx::PxVec3(testPosition.x, testPosition.y, testPosition.z),
+                    physx::PxQuat(physx::PxIdentity)));
+                spacecraftActor->setLinearVelocity(physx::PxVec3(0.0f, -25.0f, 0.0f));
+                spacecraftActor->setAngularVelocity(physx::PxVec3(0.0f));
+                inSector.sector = planetEntity;
+                inSector.localPosition = testPosition;
+                inSector.localRotation = testRotation;
+                spacecraft.currentState = outer_wilds::components::SpacecraftComponent::State::PILOTED;
+                diagnostics.Info("LandingTest", "Prepared 25 m/s radial Earth impact");
+            } else if (sectorSmoke) {
+                entt::entity startingSectorEntity = planetEntity;
+                DirectX::XMFLOAT3 testPosition = {};
+                const char* scenarioName = "EarthExit";
+
+                if (marsCollisionSmoke && solarSystem.sun != entt::null &&
+                    solarSystem.mars != entt::null) {
+                    startingSectorEntity = solarSystem.sun;
+                    const auto& marsSector = scene->GetRegistry().get<
+                        outer_wilds::components::SectorComponent>(solarSystem.mars);
+                    testPosition = {
+                        marsSector.worldPosition.x,
+                        marsSector.worldPosition.y + marsSector.planetRadius + 2.0f,
+                        marsSector.worldPosition.z
+                    };
+                    scenarioName = "MarsArrival";
+                } else if (moonTransitionSmoke && solarSystem.moon != entt::null) {
+                    startingSectorEntity = solarSystem.moon;
+                    const auto& moonSector = scene->GetRegistry().get<
+                        outer_wilds::components::SectorComponent>(solarSystem.moon);
+                    testPosition = {-moonSector.influenceRadius * 1.2f, 0.0f, 0.0f};
+                    scenarioName = "MoonExit";
+                } else if (saturnCollisionSmoke && solarSystem.sun != entt::null &&
+                           solarSystem.saturn != entt::null) {
+                    startingSectorEntity = solarSystem.sun;
+                    const auto& saturnSector = scene->GetRegistry().get<
+                        outer_wilds::components::SectorComponent>(solarSystem.saturn);
+                    testPosition = {
+                        saturnSector.worldPosition.x + saturnSector.planetRadius + 10.0f,
+                        saturnSector.worldPosition.y,
+                        saturnSector.worldPosition.z
+                    };
+                    scenarioName = "SaturnArrival";
+                } else {
+                    const auto& startingSector = scene->GetRegistry().get<
+                        outer_wilds::components::SectorComponent>(startingSectorEntity);
+                    testPosition = {startingSector.influenceRadius * 1.2f, 0.0f, 0.0f};
+                }
+
+                const physx::PxTransform testPose(
+                    physx::PxVec3(testPosition.x, testPosition.y, testPosition.z), pxRotation);
+                spacecraftActor->setGlobalPose(testPose);
+                spacecraftActor->setLinearVelocity(marsCollisionSmoke
+                    ? physx::PxVec3(0.0f, -10.0f, 0.0f)
+                    : physx::PxVec3(10.0f, 0.0f, 0.0f));
+                inSector.sector = startingSectorEntity;
+                inSector.localPosition = testPosition;
+                spacecraft.currentState = outer_wilds::components::SpacecraftComponent::State::PILOTED;
+                diagnostics.Info("SectorTransition", std::string("Prepared scenario: ") + scenarioName);
+            }
             
             std::cout << "[Spacecraft] Created at LOCAL (" << SPACECRAFT_LOCAL_X_OFFSET 
                       << ", " << SPACECRAFT_LOCAL_HEIGHT << ", 0)" 
@@ -513,12 +642,21 @@ int main(int argc, char* argv[]) {
         // ========================================
         // 启动欢迎界面流程
         // ========================================
-        if (auto uiSystem = engine.GetUISystem()) {
-            uiSystem->ShowWelcomeScreenWithKeyWait("C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\ui\\kkstudio1.jpg");
+        if (!skipWelcome) {
+            if (auto uiSystem = engine.GetUISystem()) {
+                uiSystem->ShowWelcomeScreenWithKeyWait(
+                    outer_wilds::ProjectPaths::Asset("ui/kkstudio1.jpg").string());
+            }
         }
         
-        if (auto audioSystem = engine.GetAudioSystem()) {
-            audioSystem->PlaySingleTrack("C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Outer Wilds (Original Soundtrack)\\02 - Outer Wilds.mp3");
+        if (!skipWelcome) {
+            if (auto audioSystem = engine.GetAudioSystem()) {
+                const auto welcomeMusic = outer_wilds::ProjectPaths::Asset(
+                    "Outer Wilds (Original Soundtrack)/02 - Outer Wilds.mp3");
+                if (std::filesystem::exists(welcomeMusic)) {
+                    audioSystem->PlaySingleTrack(welcomeMusic.string());
+                }
+            }
         }
         
         // 欢迎界面循环
@@ -584,8 +722,9 @@ int main(int argc, char* argv[]) {
         
         // 切换到游戏音乐
         if (auto audioSystem = engine.GetAudioSystem()) {
-            std::string musicFolder = "C:\\Users\\kkakk\\homework\\OuterWilds\\assets\\Outer Wilds (Original Soundtrack)";
-            if (audioSystem->LoadPlaylistFromDirectory(musicFolder)) {
+            const auto musicFolder = outer_wilds::ProjectPaths::Asset("Outer Wilds (Original Soundtrack)");
+            if (std::filesystem::is_directory(musicFolder) &&
+                audioSystem->LoadPlaylistFromDirectory(musicFolder.string())) {
                 audioSystem->SetLoopPlaylist(true);
                 audioSystem->Play();
             }
@@ -607,5 +746,7 @@ int main(int argc, char* argv[]) {
     
     engine.Shutdown();
     std::cout << "[Main] Program exiting normally." << std::endl;
+    diagnostics.Info("Main", "Program exiting normally");
+    diagnostics.Shutdown();
     return 0;
 }

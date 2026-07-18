@@ -72,13 +72,6 @@ private:
     
     // 每30秒打印当前扇区信息
     void PrintCurrentSectorInfo(entt::registry& registry);
-    
-    // 飞船稳定化：当飞船接近地面且速度低时让它sleep
-    void StabilizeSpacecraft(entt::registry& registry);
-    
-    // 应用扇区切换的渐进式速度补偿
-    void ApplyVelocityCompensation(float deltaTime, entt::registry& registry);
-    
     // 同步扇区内实体的世界坐标（当扇区/星球移动时调用）
     void SyncSectorEntities(entt::registry& registry);
     
@@ -100,7 +93,7 @@ private:
     void SetSectorCollisionEnabled(entt::registry& registry, entt::entity sector, bool enabled);
     
     // 检测并执行扇区切换（基于世界坐标距离、优先级和滞后机制）
-    void CheckAndSwitchSectors(entt::registry& registry);
+    void CheckAndSwitchSectors(float deltaTime, entt::registry& registry);
     
     // 为单个实体找到最佳扇区（带滞后机制防止边界振荡）
     // currentSector: 当前扇区（用于滞后计算）

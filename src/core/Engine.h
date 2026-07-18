@@ -30,6 +30,7 @@ public:
     void Run();
     void Shutdown();
     void Stop() { m_Running = false; }
+    void SetAutoStopAfterSeconds(float seconds) { m_AutoStopAfterSeconds = seconds; }
 
     template<typename T, typename... Args>
     std::shared_ptr<T> AddSystem(Args&&... args) {
@@ -55,6 +56,8 @@ private:
 
     bool m_Running = false;
     float m_DeltaTime = 0.0f;
+    float m_RunElapsedSeconds = 0.0f;
+    float m_AutoStopAfterSeconds = 0.0f;
 
     std::unique_ptr<SceneManager> m_SceneManager;
     std::vector<std::shared_ptr<System>> m_Systems;

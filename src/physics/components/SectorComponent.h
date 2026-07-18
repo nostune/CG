@@ -34,6 +34,7 @@ struct SectorComponent {
     float planetRadius = 50.0f;             // 星球实际半径（米）- 用于碰撞体
     int priority = 0;                       // 优先级（多扇区重叠时，数值越大越优先）
     bool isActive = true;                   // 是否激活
+    bool rotatesWithBody = true;            // 局部坐标系是否跟随天体自转
     
     // 父扇区（用于嵌套扇区，如月球的父扇区是地球）
     entt::entity parentSector = entt::null;
@@ -65,16 +66,6 @@ struct InSectorComponent {
     // 状态
     bool isInitialized = false;             // 是否已初始化
     bool needsSync = true;                  // 是否需要同步到 PhysX
-    
-    // ========================================
-    // 扇区过渡相关（用于平滑切换）
-    // ========================================
-    
-    // 速度补偿（扇区切换时需要逐渐应用的速度差）
-    DirectX::XMFLOAT3 velocityCompensation = { 0.0f, 0.0f, 0.0f };
-    
-    // 过渡进度 (1.0 = 刚开始过渡, 0.0 = 过渡完成)
-    float transitionProgress = 0.0f;
     
     // 切换冷却时间（切换后多久不能再次切换）
     float switchCooldown = 0.0f;

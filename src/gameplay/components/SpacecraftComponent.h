@@ -34,9 +34,9 @@ struct SpacecraftComponent {
     
     // === 旋转力矩参数（N·m）===
     // 数值偏小一些，让旋转更平滑、手感更细腻
-    float rollTorque = 500.0f;        // 滚转力矩（Q/E）
-    float pitchTorque = 100.0f;        // 俯仰力矩（上/下箭头），大幅减小，避免一按猛抬头
-    float yawTorque = 300.0f;         // 偏航力矩（左/右箭头）
+    float rollTorque = 2.6f;          // 滚转角加速度（rad/s²）
+    float pitchTorque = 2.1f;         // 俯仰角加速度（rad/s²）
+    float yawTorque = 2.1f;           // 偏航角加速度（rad/s²）
     
     // === 阻尼参数（PhysX 设置）===
     float linearDamping = 0.3f;        // 线性阻尼
@@ -83,6 +83,12 @@ struct SpacecraftComponent {
     
     // === 接地检测 ===
     bool isGrounded = false;
+    bool landingAssistEnabled = true;
+    bool landingAssistActive = false;
+    bool landingSettledLogged = false;
+    float landingContactTime = 0.0f;
+    float landingAssistMaxSpeed = 12.0f;
+    float landingSettleTime = 0.75f;
     float groundCheckDistance = 3.0f;  // 接地检测距离
 };
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <chrono>
 
 namespace outer_wilds {
@@ -11,10 +12,11 @@ public:
     }
 
     void Update() {
-        auto currentTime = std::chrono::high_resolution_clock::now();
+        const auto currentTime = Clock::now();
         if (m_LastTime.time_since_epoch().count() > 0) {
             std::chrono::duration<float> elapsed = currentTime - m_LastTime;
-            m_DeltaTime = elapsed.count();
+            m_UnscaledDeltaTime = (std::max)(0.0f, elapsed.count());
+            m_DeltaTime = (std::min)(m_UnscaledDeltaTime, MAX_FRAME_DELTA);
             m_TotalTime += m_DeltaTime;
             
             // 更新FPS计算
@@ -30,14 +32,19 @@ public:
     }
 
     float GetDeltaTime() const { return m_DeltaTime; }
+    float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; }
     float GetTotalTime() const { return m_TotalTime; }
     float GetFPS() const { return m_CurrentFPS; }
 
 private:
     TimeManager() = default;
+
+    using Clock = std::chrono::steady_clock;
+    static constexpr float MAX_FRAME_DELTA = 1.0f / 15.0f;
     
-    std::chrono::high_resolution_clock::time_point m_LastTime;
+    Clock::time_point m_LastTime;
     float m_DeltaTime = 0.0f;
+    float m_UnscaledDeltaTime = 0.0f;
     float m_TotalTime = 0.0f;
     
     // FPS计算

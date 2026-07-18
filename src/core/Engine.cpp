@@ -47,7 +47,6 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
         DebugManager::GetInstance().Log("PhysXManager", "Failed to initialize PhysX!");
         return false;
     }
-    DebugManager::GetInstance().Log("PhysXManager", "PhysX initialized successfully!");
 
     m_RenderSystem = AddSystem<RenderSystem>();
     m_RenderSystem->Initialize(m_SceneManager.get());
@@ -55,7 +54,6 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
         DebugManager::GetInstance().Log("RenderSystem", "Failed to initialize RenderBackend");
         return false;
     }
-    DebugManager::GetInstance().Log("RenderBackend", "RenderBackend initialized successfully");
 
     // === 物理系统 ===
     m_PhysicsSystem = AddSystem<PhysicsSystem>();
@@ -157,11 +155,19 @@ void Engine::MainLoop() {
     m_DeltaTime = TimeManager::GetInstance().GetDeltaTime();
 
     Update();
+
+    m_RunElapsedSeconds += m_DeltaTime;
+    if (m_AutoStopAfterSeconds > 0.0f && m_RunElapsedSeconds >= m_AutoStopAfterSeconds) {
+        DebugManager::GetInstance().Info("Engine", "Automatic diagnostic stop reached");
+        m_Running = false;
+    }
 }
 
 void Engine::Update() {
     if (!m_SceneManager || !m_SceneManager->GetActiveScene()) return;
     auto& registry = m_SceneManager->GetActiveScene()->GetRegistry();
+
+    InputManager::GetInstance().Update();
 
     // ============================================
     // 更新顺序（严格按此执行）
@@ -184,12 +190,14 @@ void Engine::Update() {
     }
     
     // 2. 游戏逻辑系统（跳过 RenderSystem、SectorPhysicsSystem、OrbitSystem）
-    for (auto& system : m_Systems) {
-        if (system.get() == static_cast<System*>(m_RenderSystem.get())) continue;
-        if (system.get() == static_cast<System*>(m_SectorPhysicsSystem.get())) continue;
-        if (system.get() == static_cast<System*>(m_OrbitSystem.get())) continue;
-        system->Update(m_DeltaTime, registry);
-    }
+    // Keep frame phases explicit. Component ownership must not depend on the
+    // order in which systems happened to be registered.
+    if (m_PlayerSystem) m_PlayerSystem->Update(m_DeltaTime, registry);
+    if (m_SpacecraftDrivingSystem) m_SpacecraftDrivingSystem->Update(m_DeltaTime, registry);
+    if (m_CameraModeSystem) m_CameraModeSystem->Update(m_DeltaTime, registry);
+    if (m_FreeCameraSystem) m_FreeCameraSystem->Update(m_DeltaTime, registry);
+    if (m_AudioSystem) m_AudioSystem->Update(m_DeltaTime, registry);
+    if (m_UISystem) m_UISystem->Update(m_DeltaTime, registry);
     
     // 3. 物理前处理：计算重力、应用力、同步 Kinematic
     if (m_SectorPhysicsSystem) {
@@ -202,6 +210,9 @@ void Engine::Update() {
     // 5. 物理后处理：读取结果、坐标转换、扇区同步
     if (m_SectorPhysicsSystem) {
         m_SectorPhysicsSystem->PostPhysicsUpdate(m_DeltaTime, registry);
+    }
+    if (m_SpacecraftDrivingSystem) {
+        m_SpacecraftDrivingSystem->PostPhysicsUpdate(m_DeltaTime, registry);
     }
 
     DebugManager::GetInstance().Update(m_DeltaTime);
