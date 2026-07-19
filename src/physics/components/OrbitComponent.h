@@ -40,6 +40,10 @@ struct OrbitComponent {
     
     // 当前轨道角度（弧度，0 = +X方向）
     float orbitAngle = 0.0f;
+
+    // Double precision is authoritative; orbitAngle is the presentation value.
+    double orbitPhase = 0.0;
+    bool orbitPhaseInitialized = false;
     
     // 轨道平面法线（默认Y轴，即水平面公转）
     DirectX::XMFLOAT3 orbitNormal = { 0.0f, 1.0f, 0.0f };
@@ -59,6 +63,8 @@ struct OrbitComponent {
     
     // 当前自转角度（弧度）
     float rotationAngle = 0.0f;
+    double rotationPhase = 0.0;
+    bool rotationPhaseInitialized = false;
     
     // 自转轴（局部坐标系）
     DirectX::XMFLOAT3 rotationAxis = { 0.0f, 1.0f, 0.0f };

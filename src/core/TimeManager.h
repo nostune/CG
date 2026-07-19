@@ -17,7 +17,7 @@ public:
             std::chrono::duration<float> elapsed = currentTime - m_LastTime;
             m_UnscaledDeltaTime = (std::max)(0.0f, elapsed.count());
             m_DeltaTime = (std::min)(m_UnscaledDeltaTime, MAX_FRAME_DELTA);
-            m_TotalTime += m_DeltaTime;
+            m_TotalTime += static_cast<double>(m_DeltaTime);
             
             // 更新FPS计算
             m_FrameCount++;
@@ -33,7 +33,9 @@ public:
 
     float GetDeltaTime() const { return m_DeltaTime; }
     float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; }
-    float GetTotalTime() const { return m_TotalTime; }
+    double GetTotalTime() const { return m_TotalTime; }
+    double GetSimulationTime() const { return m_SimulationTime; }
+    void AdvanceSimulationTime(double seconds) { m_SimulationTime += seconds; }
     float GetFPS() const { return m_CurrentFPS; }
 
 private:
@@ -45,7 +47,8 @@ private:
     Clock::time_point m_LastTime;
     float m_DeltaTime = 0.0f;
     float m_UnscaledDeltaTime = 0.0f;
-    float m_TotalTime = 0.0f;
+    double m_TotalTime = 0.0;
+    double m_SimulationTime = 0.0;
     
     // FPS计算
     int m_FrameCount = 0;

@@ -18,6 +18,10 @@ class FreeCameraSystem;
 class CameraModeSystem;
 class AudioSystem;
 class UISystem;
+class ObjectiveSystem;
+class OrbitNavigationSystem;
+class NavigationTargetSystem;
+class SolarMapCameraSystem;
 
 class Engine {
 public:
@@ -56,7 +60,7 @@ private:
 
     bool m_Running = false;
     float m_DeltaTime = 0.0f;
-    float m_RunElapsedSeconds = 0.0f;
+    double m_RunElapsedSeconds = 0.0;
     float m_AutoStopAfterSeconds = 0.0f;
 
     std::unique_ptr<SceneManager> m_SceneManager;
@@ -72,6 +76,10 @@ private:
     std::shared_ptr<FreeCameraSystem> m_FreeCameraSystem;
     std::shared_ptr<CameraModeSystem> m_CameraModeSystem;
     std::shared_ptr<AudioSystem> m_AudioSystem;
+    std::shared_ptr<ObjectiveSystem> m_ObjectiveSystem;
+    std::shared_ptr<OrbitNavigationSystem> m_OrbitNavigationSystem;
+    std::shared_ptr<NavigationTargetSystem> m_NavigationTargetSystem;
+    std::shared_ptr<SolarMapCameraSystem> m_SolarMapCameraSystem;
     std::shared_ptr<UISystem> m_UISystem;
 
     // Common resources

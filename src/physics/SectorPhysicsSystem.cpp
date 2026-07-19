@@ -6,6 +6,7 @@
 
 #include "SectorPhysicsSystem.h"
 #include "PhysXManager.h"
+#include "GravityEvaluator.h"
 #include "components/SectorComponent.h"
 #include "components/RigidBodyComponent.h"
 #include "components/GravitySourceComponent.h"
@@ -108,23 +109,18 @@ void SectorPhysicsSystem::CalculateGravity(entt::registry& registry) {
             // 在扇区内：使用局部坐标计算到扇区中心（原点）的距离
             entityPos = inSector->localPosition;
             
-            // 重力指向原点
-            float dist = std::sqrt(entityPos.x * entityPos.x + 
-                                   entityPos.y * entityPos.y + 
-                                   entityPos.z * entityPos.z);
-            
-            if (dist > 0.01f) {
-                affected.currentGravityDir = {
-                    -entityPos.x / dist,
-                    -entityPos.y / dist,
-                    -entityPos.z / dist
-                };
-            }
-            
             // 获取扇区对应的重力源
             auto* sectorGravity = registry.try_get<GravitySourceComponent>(inSector->sector);
             if (sectorGravity && sectorGravity->isActive) {
-                affected.currentGravityStrength = sectorGravity->CalculateGravityStrength(dist);
+                const auto sample = GravityEvaluator::EvaluateLocal(*sectorGravity, entityPos);
+                affected.currentGravityStrength = sample.strength;
+                if (sample.strength > 0.0f) {
+                    affected.currentGravityDir = {
+                        sample.acceleration.x / sample.strength,
+                        sample.acceleration.y / sample.strength,
+                        sample.acceleration.z / sample.strength
+                    };
+                }
                 affected.currentGravitySource = inSector->sector;
             }
         } else {
@@ -147,10 +143,15 @@ void SectorPhysicsSystem::CalculateGravity(entt::registry& registry) {
                     nearestDist = dist;
                     nearestSource = sourceEntity;
                     
-                    if (dist > 0.01f) {
-                        affected.currentGravityDir = { -dx/dist, -dy/dist, -dz/dist };
+                    const auto sample = GravityEvaluator::EvaluateLocal(source, {dx, dy, dz});
+                    affected.currentGravityStrength = sample.strength;
+                    if (sample.strength > 0.0f) {
+                        affected.currentGravityDir = {
+                            sample.acceleration.x / sample.strength,
+                            sample.acceleration.y / sample.strength,
+                            sample.acceleration.z / sample.strength
+                        };
                     }
-                    affected.currentGravityStrength = source.CalculateGravityStrength(dist);
                 }
             }
             affected.currentGravitySource = nearestSource;

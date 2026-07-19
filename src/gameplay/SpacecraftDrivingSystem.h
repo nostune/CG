@@ -30,6 +30,8 @@ public:
     void Initialize() override;
     void Initialize(std::shared_ptr<Scene> scene);
     void Update(float deltaTime, entt::registry& registry) override;
+    void PrePhysicsUpdate(float fixedDeltaTime, entt::registry& registry);
+    void PostPhysicsStep(entt::registry& registry);
     void PostPhysicsUpdate(float deltaTime, entt::registry& registry);
     void Shutdown() override;
 

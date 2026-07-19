@@ -11,6 +11,10 @@
 // #include "../physics/SectorSystem.h"
 #include "../gameplay/PlayerSystem.h"
 #include "../gameplay/SpacecraftDrivingSystem.h"
+#include "../gameplay/ObjectiveSystem.h"
+#include "../gameplay/OrbitNavigationSystem.h"
+#include "../gameplay/NavigationTargetSystem.h"
+#include "../graphics/SolarMapCameraSystem.h"
 // #include "../gameplay/PlayerAlignmentSystem.h"
 // #include "../gameplay/OrbitSystem.h"
 // #include "../gameplay/SpacecraftControlSystem.h"
@@ -80,6 +84,9 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     m_PlayerSystem = AddSystem<PlayerSystem>();
     m_PlayerSystem->Initialize(m_SceneManager->GetActiveScene());
 
+    m_NavigationTargetSystem = AddSystem<NavigationTargetSystem>();
+    m_NavigationTargetSystem->Initialize(m_SceneManager->GetActiveScene());
+
     // 飞船驾驶系统（6DOF 物理控制）
     m_SpacecraftDrivingSystem = AddSystem<SpacecraftDrivingSystem>();
     m_SpacecraftDrivingSystem->Initialize(m_SceneManager->GetActiveScene());
@@ -100,6 +107,15 @@ bool Engine::Initialize(void* hwnd, int width, int height) {
     } else {
         DebugManager::GetInstance().Log("AudioSystem", "AudioSystem initialized successfully");
     }
+
+    m_ObjectiveSystem = AddSystem<ObjectiveSystem>();
+    m_ObjectiveSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    m_OrbitNavigationSystem = AddSystem<OrbitNavigationSystem>();
+    m_OrbitNavigationSystem->Initialize(m_SceneManager->GetActiveScene());
+
+    m_SolarMapCameraSystem = AddSystem<SolarMapCameraSystem>();
+    m_SolarMapCameraSystem->Initialize();
 
     // UI系统
     m_UISystem = AddSystem<UISystem>();
@@ -169,58 +185,49 @@ void Engine::Update() {
 
     InputManager::GetInstance().Update();
 
-    // ============================================
-    // 更新顺序（严格按此执行）
-    // ============================================
-    // 1. 轨道系统（更新星球位置）
-    // 2. 输入/游戏逻辑系统
-    // 3. SectorPhysicsSystem::PrePhysicsUpdate (重力、力)
-    // 4. PhysXManager::Update (simulate + fetchResults)
-    // 5. SectorPhysicsSystem::PostPhysicsUpdate (坐标转换、扇区同步)
-    // 6. 相机系统
-    // 7. 渲染系统
-    // 
-    // 【规则】任何修改 PhysX Actor 的代码必须标注:
-    //   // [来源: XXXSystem] 操作描述
-    // ============================================
-
-    // 1. 轨道系统：更新星球公转/自转位置（必须在其他系统之前）
-    if (m_OrbitSystem) {
-        m_OrbitSystem->Update(m_DeltaTime, registry);
-    }
-    
-    // 2. 游戏逻辑系统（跳过 RenderSystem、SectorPhysicsSystem、OrbitSystem）
-    // Keep frame phases explicit. Component ownership must not depend on the
-    // order in which systems happened to be registered.
+    // The current controller, sector transform, and camera pipeline advances
+    // together once per rendered frame. Fixed substeps require interpolated
+    // presentation state and are intentionally not enabled yet.
+    TimeManager::GetInstance().AdvanceSimulationTime(m_DeltaTime);
+    if (m_OrbitSystem) m_OrbitSystem->Update(m_DeltaTime, registry);
     if (m_PlayerSystem) m_PlayerSystem->Update(m_DeltaTime, registry);
+    if (m_NavigationTargetSystem) m_NavigationTargetSystem->Update(m_DeltaTime, registry);
     if (m_SpacecraftDrivingSystem) m_SpacecraftDrivingSystem->Update(m_DeltaTime, registry);
     if (m_CameraModeSystem) m_CameraModeSystem->Update(m_DeltaTime, registry);
     if (m_FreeCameraSystem) m_FreeCameraSystem->Update(m_DeltaTime, registry);
     if (m_AudioSystem) m_AudioSystem->Update(m_DeltaTime, registry);
-    if (m_UISystem) m_UISystem->Update(m_DeltaTime, registry);
-    
-    // 3. 物理前处理：计算重力、应用力、同步 Kinematic
+
+    if (m_NavigationTargetSystem) m_NavigationTargetSystem->PrePhysicsUpdate(registry);
+    if (m_OrbitNavigationSystem) m_OrbitNavigationSystem->PrePhysicsUpdate(registry);
+    if (m_SpacecraftDrivingSystem) {
+        m_SpacecraftDrivingSystem->PrePhysicsUpdate(m_DeltaTime, registry);
+    }
     if (m_SectorPhysicsSystem) {
         m_SectorPhysicsSystem->PrePhysicsUpdate(m_DeltaTime, registry);
     }
-    
-    // 4. PhysX 物理模拟
+
     PhysXManager::GetInstance().Update(m_DeltaTime);
-    
-    // 5. 物理后处理：读取结果、坐标转换、扇区同步
+
     if (m_SectorPhysicsSystem) {
         m_SectorPhysicsSystem->PostPhysicsUpdate(m_DeltaTime, registry);
     }
     if (m_SpacecraftDrivingSystem) {
+        m_SpacecraftDrivingSystem->PostPhysicsStep(registry);
         m_SpacecraftDrivingSystem->PostPhysicsUpdate(m_DeltaTime, registry);
     }
 
-    DebugManager::GetInstance().Update(m_DeltaTime);
+    auto& diagnostics = DebugManager::GetInstance();
+    diagnostics.SetMetric("Physics steps", 1.0, "steps");
+    diagnostics.SetMetric("Physics step dt", static_cast<double>(m_DeltaTime) * 1000.0, "ms");
+    diagnostics.SetMetric("Simulation time", TimeManager::GetInstance().GetSimulationTime(), "s");
 
-    // 6-7. 渲染系统最后执行
-    if (m_RenderSystem) {
-        m_RenderSystem->Update(m_DeltaTime, registry);
-    }
+    if (m_OrbitNavigationSystem) m_OrbitNavigationSystem->Update(m_DeltaTime, registry);
+    if (m_ObjectiveSystem) m_ObjectiveSystem->Update(m_DeltaTime, registry);
+    if (m_UISystem) m_UISystem->Update(m_DeltaTime, registry);
+    if (m_SolarMapCameraSystem) m_SolarMapCameraSystem->Update(m_DeltaTime, registry);
+
+    DebugManager::GetInstance().Update(m_DeltaTime);
+    if (m_RenderSystem) m_RenderSystem->Update(m_DeltaTime, registry);
 }
 
 }

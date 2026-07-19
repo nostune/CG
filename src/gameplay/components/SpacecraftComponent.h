@@ -88,7 +88,9 @@ struct SpacecraftComponent {
     bool landingSettledLogged = false;
     float landingContactTime = 0.0f;
     float landingAssistMaxSpeed = 12.0f;
-    float landingSettleTime = 0.75f;
+    float landingSettleTime = 2.0f;
+    float landingSettleLinearSpeed = 1.0f;
+    float landingSettleAngularSpeed = 0.6f;
     float groundCheckDistance = 3.0f;  // 接地检测距离
 };
 

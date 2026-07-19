@@ -5,6 +5,7 @@
  */
 
 #include "OrbitSystem.h"
+#include "OrbitGeometry.h"
 #include "components/OrbitComponent.h"
 #include "components/SectorComponent.h"
 #include "../scene/components/TransformComponent.h"
@@ -43,16 +44,18 @@ void OrbitSystem::UpdateOrbits(float deltaTime, entt::registry& registry) {
         if (orbit.orbitPeriod <= 0.0f) continue;
         
         // 更新轨道角度
-        float angularVelocity = orbit.GetOrbitalAngularVelocity();
-        orbit.orbitAngle += angularVelocity * deltaTime;
+        const float angularVelocity = orbit.GetOrbitalAngularVelocity();
+        if (!orbit.orbitPhaseInitialized) {
+            orbit.orbitPhase = static_cast<double>(orbit.orbitAngle);
+            orbit.orbitPhaseInitialized = true;
+        }
+        orbit.orbitPhase = std::fmod(
+            orbit.orbitPhase + static_cast<double>(angularVelocity) * deltaTime,
+            static_cast<double>(DirectX::XM_2PI));
+        if (orbit.orbitPhase < 0.0) orbit.orbitPhase += DirectX::XM_2PI;
+        orbit.orbitAngle = static_cast<float>(orbit.orbitPhase);
         
         // 保持角度在 [0, 2π) 范围
-        while (orbit.orbitAngle >= DirectX::XM_2PI) {
-            orbit.orbitAngle -= DirectX::XM_2PI;
-        }
-        while (orbit.orbitAngle < 0.0f) {
-            orbit.orbitAngle += DirectX::XM_2PI;
-        }
         
         // 获取轨道中心（如果有父实体，使用父实体位置）
         DirectX::XMFLOAT3 center = orbit.orbitCenter;
@@ -64,7 +67,7 @@ void OrbitSystem::UpdateOrbits(float deltaTime, entt::registry& registry) {
         }
         
         // 计算新的轨道位置
-        DirectX::XMFLOAT3 newPosition = CalculateOrbitPosition(
+        DirectX::XMFLOAT3 newPosition = OrbitGeometry::CalculatePosition(
             center,
             orbit.orbitRadius,
             orbit.orbitAngle,
@@ -90,7 +93,6 @@ void OrbitSystem::UpdateOrbits(float deltaTime, entt::registry& registry) {
                 orbitVelocity.z = dx / r * linearSpeed;
             }
         }
-        
         // 更新 SectorComponent（如果存在）
         auto* sector = registry.try_get<SectorComponent>(entity);
         if (sector) {
@@ -104,6 +106,20 @@ void OrbitSystem::UpdateOrbits(float deltaTime, entt::registry& registry) {
             transform->position = newPosition;
         }
     }
+
+    // Compose child world velocities only after every body's own orbital
+    // velocity has been updated. This keeps the result independent of EnTT
+    // iteration order (for example Moon velocity includes Earth velocity).
+    for (const auto entity : view) {
+        const auto& orbit = view.get<OrbitComponent>(entity);
+        if (orbit.orbitParent == entt::null) continue;
+        auto* sector = registry.try_get<SectorComponent>(entity);
+        const auto* parentSector = registry.try_get<SectorComponent>(orbit.orbitParent);
+        if (!sector || !parentSector) continue;
+        sector->worldVelocity.x += parentSector->worldVelocity.x;
+        sector->worldVelocity.y += parentSector->worldVelocity.y;
+        sector->worldVelocity.z += parentSector->worldVelocity.z;
+    }
 }
 
 void OrbitSystem::UpdateRotations(float deltaTime, entt::registry& registry) {
@@ -116,13 +132,18 @@ void OrbitSystem::UpdateRotations(float deltaTime, entt::registry& registry) {
         if (orbit.rotationPeriod <= 0.0f) continue;
         
         // 更新自转角度
-        float angularVelocity = orbit.GetRotationAngularVelocity();
-        orbit.rotationAngle += angularVelocity * deltaTime;
+        const float angularVelocity = orbit.GetRotationAngularVelocity();
+        if (!orbit.rotationPhaseInitialized) {
+            orbit.rotationPhase = static_cast<double>(orbit.rotationAngle);
+            orbit.rotationPhaseInitialized = true;
+        }
+        orbit.rotationPhase = std::fmod(
+            orbit.rotationPhase + static_cast<double>(angularVelocity) * deltaTime,
+            static_cast<double>(DirectX::XM_2PI));
+        if (orbit.rotationPhase < 0.0) orbit.rotationPhase += DirectX::XM_2PI;
+        orbit.rotationAngle = static_cast<float>(orbit.rotationPhase);
         
         // 保持角度在 [0, 2π) 范围
-        while (orbit.rotationAngle >= DirectX::XM_2PI) {
-            orbit.rotationAngle -= DirectX::XM_2PI;
-        }
         
         // 更新 SectorComponent 的旋转（如果存在）
         auto* sector = registry.try_get<SectorComponent>(entity);
@@ -143,65 +164,6 @@ void OrbitSystem::UpdateRotations(float deltaTime, entt::registry& registry) {
             DirectX::XMStoreFloat4(&transform->rotation, rotQuat);
         }
     }
-}
-
-DirectX::XMFLOAT3 OrbitSystem::CalculateOrbitPosition(
-    const DirectX::XMFLOAT3& center,
-    float radius,
-    float angle,
-    const DirectX::XMFLOAT3& normal,
-    float inclination
-) {
-    // 基本圆形轨道（在XZ平面上）
-    float x = radius * std::cos(angle);
-    float z = radius * std::sin(angle);
-    float y = 0.0f;
-    
-    // 如果有倾角，应用倾斜
-    if (std::abs(inclination) > 0.001f) {
-        // 先在XZ平面计算，然后绕X轴旋转倾角
-        float cosInc = std::cos(inclination);
-        float sinInc = std::sin(inclination);
-        float newY = z * sinInc;
-        float newZ = z * cosInc;
-        y = newY;
-        z = newZ;
-    }
-    
-    // 如果轨道平面法线不是Y轴，需要旋转整个轨道平面
-    DirectX::XMFLOAT3 defaultUp = { 0.0f, 1.0f, 0.0f };
-    DirectX::XMVECTOR defaultUpVec = DirectX::XMLoadFloat3(&defaultUp);
-    DirectX::XMVECTOR normalVec = DirectX::XMLoadFloat3(&normal);
-    normalVec = DirectX::XMVector3Normalize(normalVec);
-    
-    // 检查是否需要旋转（法线不是Y轴）
-    DirectX::XMVECTOR dot = DirectX::XMVector3Dot(defaultUpVec, normalVec);
-    float dotValue;
-    DirectX::XMStoreFloat(&dotValue, dot);
-    
-    if (std::abs(dotValue) < 0.999f) {
-        // 计算从Y轴到目标法线的旋转四元数
-        DirectX::XMVECTOR rotAxis = DirectX::XMVector3Cross(defaultUpVec, normalVec);
-        rotAxis = DirectX::XMVector3Normalize(rotAxis);
-        float rotAngle = std::acos(std::clamp(dotValue, -1.0f, 1.0f));
-        DirectX::XMVECTOR rotQuat = DirectX::XMQuaternionRotationAxis(rotAxis, rotAngle);
-        
-        // 旋转轨道位置
-        DirectX::XMFLOAT3 pos = { x, y, z };
-        DirectX::XMVECTOR posVec = DirectX::XMLoadFloat3(&pos);
-        posVec = DirectX::XMVector3Rotate(posVec, rotQuat);
-        DirectX::XMStoreFloat3(&pos, posVec);
-        x = pos.x;
-        y = pos.y;
-        z = pos.z;
-    }
-    
-    // 加上轨道中心
-    return {
-        center.x + x,
-        center.y + y,
-        center.z + z
-    };
 }
 
 } // namespace outer_wilds

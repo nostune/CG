@@ -3,14 +3,25 @@
 #include "../core/ProjectPaths.h"
 #include "../core/TimeManager.h"
 #include "../physics/PhysXManager.h"
+#include "../gameplay/components/GameState.h"
+#include "../gameplay/components/ObjectiveComponent.h"
+#include "../gameplay/components/OrbitNavigationComponent.h"
+#include "../gameplay/components/NavigationTargetState.h"
+#include "../gameplay/components/SpacecraftComponent.h"
+#include "../gameplay/components/SolarMapState.h"
+#include "../physics/components/SectorComponent.h"
+#include "../input/InputManager.h"
 #include "../graphics/debug/PhysXDebugRenderer.h"
+#include "../graphics/components/CameraComponent.h"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <Windows.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -110,6 +121,44 @@ bool UISystem::Initialize(ID3D11Device* device, ID3D11DeviceContext* context, HW
 void UISystem::Update(float deltaTime, entt::registry& registry) {
     if (!m_ImGuiInitialized) return;
 
+    if (m_PendingMapLockTarget != entt::null) {
+        if (!registry.ctx().contains<components::NavigationTargetState>()) {
+            registry.ctx().emplace<components::NavigationTargetState>();
+        }
+        auto& target = registry.ctx().get<components::NavigationTargetState>();
+        target.lockedTarget = m_PendingMapLockTarget;
+        target.matchCompletionLogged = false;
+        m_PendingMapLockTarget = entt::null;
+    }
+    UpdateGameplaySnapshot(registry);
+
+    if (InputManager::GetInstance().IsKeyPressed('M') &&
+        m_WelcomeScreenState == WelcomeScreenState::Hidden) {
+        m_ShowNavigationMap = !m_ShowNavigationMap;
+        if (m_ShowNavigationMap) {
+            m_MouseLookBeforeMap = InputManager::GetInstance().IsMouseLookEnabled();
+            InputManager::GetInstance().SetMouseLookEnabled(false);
+        } else {
+            InputManager::GetInstance().SetMouseLookEnabled(m_MouseLookBeforeMap);
+        }
+    }
+
+    if (!registry.ctx().contains<components::SolarMapViewState>()) {
+        registry.ctx().emplace<components::SolarMapViewState>();
+    }
+    auto& mapView = registry.ctx().get<components::SolarMapViewState>();
+    if (m_ShowNavigationMap && InputManager::GetInstance().IsKeyPressed(VK_TAB)) {
+        m_MapCenteredOnSpacecraft = !m_MapCenteredOnSpacecraft;
+        m_FocusedMapBody = entt::null;
+        m_MapPan = {0.0f, 0.0f};
+    }
+    mapView.requestedOpen = m_ShowNavigationMap;
+    mapView.yaw = m_MapYaw;
+    mapView.pitch = m_MapPitch;
+    mapView.zoom = m_MapZoom;
+    mapView.centerOnSpacecraft = m_MapCenteredOnSpacecraft;
+    mapView.focusedBody = m_FocusedMapBody;
+
     if (GetAsyncKeyState(VK_F1) & 1) {
         m_ShowDiagnostics = !m_ShowDiagnostics;
         DebugManager::GetInstance().Info(
@@ -206,6 +255,13 @@ void UISystem::Render() {
         RenderWelcomeScreen();
     }
 
+    if (m_WelcomeScreenState == WelcomeScreenState::Hidden && !m_ShowNavigationMap) {
+        RenderObjectiveHud();
+        RenderNavigationTargetHud();
+    }
+
+    if (m_ShowNavigationMap) RenderNavigationMap();
+
     if (m_ShowDiagnostics) {
         RenderDiagnosticsPanel();
     }
@@ -216,6 +272,412 @@ void UISystem::Render() {
     // 结束ImGui帧并渲染
     ImGui::Render();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void UISystem::UpdateGameplaySnapshot(entt::registry& registry) {
+    m_ObjectiveHud = {};
+    m_Navigation = {};
+    m_NavigationTarget = {};
+
+    auto navigationView = registry.view<components::OrbitNavigationComponent, components::SpacecraftComponent>();
+    entt::entity navigationEntity = entt::null;
+    for (const auto entity : navigationView) {
+        navigationEntity = entity;
+        if (navigationView.get<components::SpacecraftComponent>(entity).currentState ==
+            components::SpacecraftComponent::State::PILOTED) {
+            break;
+        }
+    }
+    if (navigationEntity != entt::null) {
+        const auto& navigation = navigationView.get<components::OrbitNavigationComponent>(navigationEntity);
+        if (!navigation.predictedTrajectory.empty()) {
+            m_Navigation.available = true;
+            m_Navigation.bodyRadius = navigation.bodyRadius;
+            m_Navigation.altitude = navigation.altitude;
+            m_Navigation.speed = navigation.speed;
+            m_Navigation.radialSpeed = navigation.radialSpeed;
+            m_Navigation.tangentialSpeed = navigation.tangentialSpeed;
+            m_Navigation.circularOrbitSpeed = navigation.circularOrbitSpeed;
+            m_Navigation.circularizeActive = navigation.circularizeActive;
+            m_Navigation.periapsisAltitude = navigation.predictedPeriapsisAltitude;
+            m_Navigation.apoapsisAltitude = navigation.predictedApoapsisAltitude;
+            m_Navigation.trajectoryStatus = navigation.circularizeActive
+                ? "CIRCULARIZING"
+                : (navigation.predictedImpact
+                    ? "IMPACT"
+                    : (navigation.predictedEscape
+                        ? "ESCAPE"
+                        : (navigation.stableOrbit ? "STABLE" : "BALLISTIC")));
+            if (const auto* sector = registry.try_get<components::SectorComponent>(navigation.centralBody)) {
+                m_Navigation.bodyName = sector->name;
+            }
+
+        }
+    }
+
+    if (const auto* solarMap = registry.ctx().find<components::SolarMapState>()) {
+        m_Navigation.bodies.reserve(solarMap->bodies.size());
+        for (const auto& body : solarMap->bodies) {
+            m_Navigation.bodies.push_back({
+                body.entity, body.name, body.position, body.radius, body.currentSector});
+        }
+        m_Navigation.bodyOrbits.reserve(solarMap->bodyOrbits.size());
+        for (const auto& orbit : solarMap->bodyOrbits) {
+            m_Navigation.bodyOrbits.push_back({orbit.points, false});
+        }
+        m_Navigation.predictedWorldTrajectory = {
+            solarMap->predictedSpacecraftPath.points,
+            solarMap->predictedSpacecraftPath.dashed};
+        m_Navigation.spacecraftWorldPosition = solarMap->spacecraftPosition;
+        m_Navigation.hasSpacecraftWorldPosition = solarMap->hasSpacecraft;
+        m_Navigation.available = !m_Navigation.bodies.empty();
+    }
+    if (const auto* mapView = registry.ctx().find<components::SolarMapViewState>()) {
+        m_Navigation.viewProjection = mapView->viewProjection;
+        m_Navigation.hasMapCamera = mapView->cameraOverrideActive;
+        m_Navigation.cameraTransition = mapView->transition;
+    }
+    if (const auto* target = registry.ctx().find<components::NavigationTargetState>()) {
+        m_Navigation.lockedTarget = target->lockedTarget;
+        m_NavigationTarget.hasCandidate = target->hasCandidate;
+        m_NavigationTarget.hasLockedTarget = target->lockedTarget != entt::null;
+        m_NavigationTarget.matchingVelocity = target->matchingVelocity;
+        m_NavigationTarget.candidateWorldPosition = target->candidateWorldPosition;
+        m_NavigationTarget.targetWorldPosition = target->targetWorldPosition;
+        m_NavigationTarget.targetName = target->targetName;
+        m_NavigationTarget.distance = target->distance;
+        m_NavigationTarget.relativeSpeed = target->relativeSpeed;
+
+        auto cameraView = registry.view<components::CameraComponent>();
+        for (const auto entity : cameraView) {
+            const auto& camera = cameraView.get<components::CameraComponent>(entity);
+            if (!camera.isActive) continue;
+            const auto view = DirectX::XMMatrixLookAtLH(
+                DirectX::XMLoadFloat3(&camera.position),
+                DirectX::XMLoadFloat3(&camera.target),
+                DirectX::XMLoadFloat3(&camera.up));
+            const auto projection = DirectX::XMMatrixPerspectiveFovLH(
+                DirectX::XMConvertToRadians(camera.fov),
+                camera.aspectRatio,
+                camera.nearPlane,
+                camera.farPlane);
+            DirectX::XMStoreFloat4x4(&m_NavigationTarget.viewProjection, view * projection);
+        }
+    }
+
+    const auto* gameState = registry.ctx().find<components::GameState>();
+    if (!gameState || gameState->activeObjective == entt::null ||
+        !registry.valid(gameState->activeObjective)) {
+        return;
+    }
+
+    const auto* objective = registry.try_get<components::ObjectiveComponent>(gameState->activeObjective);
+    if (!objective || !objective->showInHud ||
+        objective->status != components::ObjectiveStatus::Active) {
+        return;
+    }
+
+    m_ObjectiveHud.visible = true;
+    m_ObjectiveHud.title = objective->title;
+    m_ObjectiveHud.description = objective->description;
+    m_ObjectiveHud.progress = objective->progress;
+    m_ObjectiveHud.requiredProgress = objective->requiredProgress;
+}
+
+void UISystem::RenderNavigationMap() {
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.01f, 0.018f, 0.022f, 0.12f));
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav;
+    ImGui::Begin("NavigationMap", nullptr, flags);
+
+    auto* drawList = ImGui::GetWindowDrawList();
+    if (ImGui::IsWindowHovered()) {
+        const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        const bool rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        if (io.MouseWheel != 0.0f) {
+            m_MapZoom = std::clamp(m_MapZoom * std::pow(1.16f, io.MouseWheel), 0.25f, 16.0f);
+        }
+        if (leftDown && !rightDown && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+            m_MapYaw += io.MouseDelta.x * 0.006f;
+            m_MapPitch = std::clamp(m_MapPitch + io.MouseDelta.y * 0.006f, -1.45f, 1.45f);
+        }
+        if (rightDown && !leftDown && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 1.0f)) {
+            m_MapPan.x += io.MouseDelta.x;
+            m_MapPan.y += io.MouseDelta.y;
+        }
+    }
+
+    if (m_Navigation.available && !m_Navigation.bodies.empty()) {
+        auto project = [&](const DirectX::XMFLOAT3& point, float* depth = nullptr) {
+            const auto projected = DirectX::XMVector3TransformCoord(
+                DirectX::XMLoadFloat3(&point),
+                DirectX::XMLoadFloat4x4(&m_Navigation.viewProjection));
+            DirectX::XMFLOAT3 ndc;
+            DirectX::XMStoreFloat3(&ndc, projected);
+            if (depth) *depth = ndc.z;
+            return ImVec2(
+                (ndc.x * 0.5f + 0.5f) * io.DisplaySize.x + m_MapPan.x,
+                (-ndc.y * 0.5f + 0.5f) * io.DisplaySize.y + m_MapPan.y);
+        };
+
+        const ImU32 orbitColor = IM_COL32(111, 130, 136, 105);
+        for (const auto& orbit : m_Navigation.bodyOrbits) {
+            for (std::size_t index = 1; index < orbit.points.size(); ++index) {
+                drawList->AddLine(project(orbit.points[index - 1]), project(orbit.points[index]), orbitColor, 1.0f);
+            }
+        }
+
+        const ImU32 predictionColor = m_Navigation.trajectoryStatus == "IMPACT"
+            ? IM_COL32(244, 97, 74, 245)
+            : (m_Navigation.trajectoryStatus == "ESCAPE"
+                ? IM_COL32(244, 180, 73, 245)
+                : IM_COL32(93, 224, 200, 245));
+        const auto& predicted = m_Navigation.predictedWorldTrajectory.points;
+        for (std::size_t index = 1; index < predicted.size(); ++index) {
+            if ((index / 3) % 2 == 0) {
+                drawList->AddLine(project(predicted[index - 1]), project(predicted[index]), predictionColor, 2.5f);
+            }
+        }
+
+        struct ProjectedBody {
+            const NavigationSnapshot::Body* body = nullptr;
+            ImVec2 screen;
+            float depth = 0.0f;
+            float displayRadius = 5.0f;
+        };
+        std::vector<ProjectedBody> projectedBodies;
+        projectedBodies.reserve(m_Navigation.bodies.size());
+        for (const auto& body : m_Navigation.bodies) {
+            float depth = 0.0f;
+            const ImVec2 screen = project(body.position, &depth);
+            const float radius = body.name.find("Sun") != std::string::npos ? 14.0f : 7.0f;
+            projectedBodies.push_back({&body, screen, depth, radius});
+        }
+        std::sort(projectedBodies.begin(), projectedBodies.end(), [](const auto& a, const auto& b) {
+            return a.depth > b.depth;
+        });
+
+        const ImVec2 mouse = io.MousePos;
+        ProjectedBody* hovered = nullptr;
+        float hoverDistance = (std::numeric_limits<float>::max)();
+        for (auto& projected : projectedBodies) {
+            const float dx = mouse.x - projected.screen.x;
+            const float dy = mouse.y - projected.screen.y;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (distance < (std::max)(projected.displayRadius + 7.0f, 14.0f) && distance < hoverDistance) {
+                hovered = &projected;
+                hoverDistance = distance;
+            }
+        }
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            m_SelectedMapBody = hovered->body->entity;
+            m_PendingMapLockTarget = hovered->body->entity;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                m_FocusedMapBody = hovered->body->entity;
+                m_MapPan = {0.0f, 0.0f};
+            }
+        }
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right)) {
+            m_FocusedMapBody = entt::null;
+            m_MapPan = {0.0f, 0.0f};
+            m_MapZoom = 1.0f;
+        }
+
+        bool selectedStillExists = false;
+        for (const auto& projected : projectedBodies) {
+            const bool isSelected = projected.body->entity == m_SelectedMapBody;
+            const bool isLocked = projected.body->entity == m_Navigation.lockedTarget;
+            const bool isHovered = hovered && hovered->body->entity == projected.body->entity;
+            selectedStillExists = selectedStillExists || isSelected;
+            ImU32 bodyColor = projected.body->name.find("Sun") != std::string::npos
+                ? IM_COL32(247, 184, 80, 210)
+                : IM_COL32(142, 205, 216, 210);
+            if (projected.body->currentSector) bodyColor = IM_COL32(92, 224, 196, 240);
+            drawList->AddCircle(projected.screen, projected.displayRadius, bodyColor, 24, 1.5f);
+            if (isSelected || isHovered || projected.body->currentSector) {
+                drawList->AddCircle(
+                    projected.screen,
+                    projected.displayRadius + (isSelected ? 6.0f : 3.0f),
+                    isSelected ? IM_COL32(255, 207, 91, 255) : IM_COL32(205, 232, 232, 220),
+                    28, isSelected ? 2.0f : 1.0f);
+            }
+            if (isLocked) {
+                drawList->AddCircle(
+                    projected.screen, projected.displayRadius + 10.0f,
+                    IM_COL32(93, 224, 200, 255), 4, 2.0f);
+            }
+            const ImVec2 labelSize = ImGui::CalcTextSize(projected.body->name.c_str());
+            drawList->AddText(
+                ImVec2(projected.screen.x - labelSize.x * 0.5f,
+                       projected.screen.y + projected.displayRadius + 6.0f),
+                IM_COL32(218, 226, 226, 220), projected.body->name.c_str());
+        }
+        if (!selectedStillExists) m_SelectedMapBody = entt::null;
+
+        if (m_Navigation.hasSpacecraftWorldPosition) {
+            const ImVec2 ship = project(m_Navigation.spacecraftWorldPosition);
+            drawList->AddTriangleFilled(
+                ImVec2(ship.x, ship.y - 7.0f),
+                ImVec2(ship.x - 5.0f, ship.y + 5.0f),
+                ImVec2(ship.x + 5.0f, ship.y + 5.0f),
+                IM_COL32(255, 210, 92, 255));
+        }
+
+        const NavigationSnapshot::Body* selectedBody = nullptr;
+        for (const auto& body : m_Navigation.bodies) {
+            if (body.entity == m_SelectedMapBody) selectedBody = &body;
+        }
+
+        ImGui::SetCursorPos(ImVec2(32.0f, 30.0f));
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("SOLAR SYSTEM");
+        ImGui::PushStyleColor(ImGuiCol_Text, predictionColor);
+        ImGui::TextUnformatted(m_Navigation.trajectoryStatus.c_str());
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        if (selectedBody) {
+            ImGui::TextUnformatted(selectedBody->name.c_str());
+            if (m_Navigation.hasSpacecraftWorldPosition) {
+                const float dx = selectedBody->position.x - m_Navigation.spacecraftWorldPosition.x;
+                const float dy = selectedBody->position.y - m_Navigation.spacecraftWorldPosition.y;
+                const float dz = selectedBody->position.z - m_Navigation.spacecraftWorldPosition.z;
+                ImGui::Text("DISTANCE       %7.1f m", std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+        } else {
+            ImGui::Text("ALTITUDE       %7.1f m", m_Navigation.altitude);
+            ImGui::Text("SPEED          %7.1f m/s", m_Navigation.speed);
+            ImGui::Text("RADIAL         %+7.1f m/s", m_Navigation.radialSpeed);
+            ImGui::Text("TANGENTIAL     %7.1f m/s", m_Navigation.tangentialSpeed);
+            ImGui::Text("CIRCULAR       %7.1f m/s", m_Navigation.circularOrbitSpeed);
+            ImGui::Text("PERIAPSIS      %7.1f m", m_Navigation.periapsisAltitude);
+            ImGui::Text("APOAPSIS       %7.1f m", m_Navigation.apoapsisAltitude);
+        }
+        ImGui::EndGroup();
+    } else {
+        const char* unavailable = "NO LOCAL ORBIT DATA";
+        const ImVec2 unavailableCenter(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+        const ImVec2 textSize = ImGui::CalcTextSize(unavailable);
+        ImGui::SetCursorPos(ImVec2(unavailableCenter.x - textSize.x * 0.5f, unavailableCenter.y));
+        ImGui::TextUnformatted(unavailable);
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+}
+
+void UISystem::RenderNavigationTargetHud() {
+    if (!m_NavigationTarget.hasCandidate && !m_NavigationTarget.hasLockedTarget) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoBackground;
+    ImGui::Begin("NavigationTargetHud", nullptr, flags);
+    auto* drawList = ImGui::GetWindowDrawList();
+
+    auto project = [&](const DirectX::XMFLOAT3& point, ImVec2& screen) {
+        const auto projected = DirectX::XMVector3TransformCoord(
+            DirectX::XMLoadFloat3(&point),
+            DirectX::XMLoadFloat4x4(&m_NavigationTarget.viewProjection));
+        DirectX::XMFLOAT3 ndc;
+        DirectX::XMStoreFloat3(&ndc, projected);
+        if (ndc.z <= 0.0f || ndc.z >= 1.0f) return false;
+        screen = {
+            (ndc.x * 0.5f + 0.5f) * io.DisplaySize.x,
+            (-ndc.y * 0.5f + 0.5f) * io.DisplaySize.y};
+        return screen.x >= -80.0f && screen.x <= io.DisplaySize.x + 80.0f &&
+            screen.y >= -80.0f && screen.y <= io.DisplaySize.y + 80.0f;
+    };
+
+    auto drawBrackets = [&](const ImVec2& center, float radius, ImU32 color, bool doubled) {
+        const float arm = 9.0f;
+        auto drawPair = [&](float inset) {
+            const float left = center.x - radius - inset;
+            const float right = center.x + radius + inset;
+            const float top = center.y - radius;
+            const float bottom = center.y + radius;
+            drawList->AddLine({left, top}, {left, bottom}, color, 2.0f);
+            drawList->AddLine({left, top}, {left + arm, top}, color, 2.0f);
+            drawList->AddLine({left, bottom}, {left + arm, bottom}, color, 2.0f);
+            drawList->AddLine({right, top}, {right, bottom}, color, 2.0f);
+            drawList->AddLine({right - arm, top}, {right, top}, color, 2.0f);
+            drawList->AddLine({right - arm, bottom}, {right, bottom}, color, 2.0f);
+        };
+        drawPair(0.0f);
+        if (doubled) drawPair(6.0f);
+    };
+
+    if (m_NavigationTarget.hasCandidate && !m_NavigationTarget.hasLockedTarget) {
+        ImVec2 candidate;
+        if (project(m_NavigationTarget.candidateWorldPosition, candidate)) {
+            drawBrackets(candidate, 20.0f, IM_COL32(190, 210, 212, 150), false);
+        }
+    }
+
+    if (m_NavigationTarget.hasLockedTarget) {
+        ImVec2 target;
+        if (project(m_NavigationTarget.targetWorldPosition, target)) {
+            const ImU32 color = m_NavigationTarget.matchingVelocity
+                ? IM_COL32(255, 205, 92, 255)
+                : IM_COL32(93, 224, 200, 255);
+            drawBrackets(target, 28.0f, color, true);
+            const std::string label = m_NavigationTarget.targetName + "  " +
+                std::to_string(static_cast<int>(m_NavigationTarget.distance)) + " m";
+            const std::string velocity =
+                (m_NavigationTarget.matchingVelocity ? "MATCHING  " : "REL  ") +
+                std::to_string(static_cast<int>(m_NavigationTarget.relativeSpeed)) + " m/s";
+            const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
+            const ImVec2 velocitySize = ImGui::CalcTextSize(velocity.c_str());
+            drawList->AddText({target.x - labelSize.x * 0.5f, target.y + 38.0f}, color, label.c_str());
+            drawList->AddText(
+                {target.x - velocitySize.x * 0.5f, target.y + 55.0f}, color, velocity.c_str());
+        }
+    }
+
+    ImGui::End();
+}
+
+void UISystem::RenderObjectiveHud() {
+    if (!m_ObjectiveHud.visible) return;
+
+    ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(420.0f, 180.0f));
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    if (ImGui::Begin("ObjectiveHud", nullptr, flags)) {
+        ImGui::TextUnformatted(m_ObjectiveHud.title.c_str());
+        if (!m_ObjectiveHud.description.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.76f, 0.80f, 1.0f));
+            ImGui::TextWrapped("%s", m_ObjectiveHud.description.c_str());
+            ImGui::PopStyleColor();
+        }
+        const float fraction = m_ObjectiveHud.requiredProgress > 0.0f
+            ? m_ObjectiveHud.progress / m_ObjectiveHud.requiredProgress
+            : 0.0f;
+        ImGui::ProgressBar((std::clamp)(fraction, 0.0f, 1.0f), ImVec2(-1.0f, 4.0f), "");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void UISystem::RenderDiagnosticsPanel() {

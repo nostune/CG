@@ -91,6 +91,8 @@ public:
     // 太阳参数
     // ========================================
     static constexpr float SUN_RADIUS = 200.0f;           // 太阳半径（增大到200m，更有存在感）
+    // 与地球 1250m / 600s 的既有轨道相匹配，使离开行星的物体自然进入绕日轨道。
+    static constexpr float SUN_SURFACE_GRAVITY = 5.35f;
     
     // ========================================
     // 行星相对大小（相对于地球）
@@ -148,7 +150,7 @@ public:
             "assets/models/sun/sun_final.glb",
             "",
             SUN_RADIUS,
-            0.0f,                           // 无表面重力（不可着陆）
+            SUN_SURFACE_GRAVITY,
             0.0f,                           // 无大气
             0.0f,                           // 轨道中心
             0.0f,

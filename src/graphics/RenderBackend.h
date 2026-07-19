@@ -23,6 +23,8 @@ public:
     ID3D11DeviceContext* GetContext() { return m_Context.Get(); }
     ID3D11RenderTargetView* GetRenderTargetView() { return m_RenderTargetView.Get(); }
     ID3D11DepthStencilView* GetDepthStencilView() { return m_DepthStencilView.Get(); }
+    int GetWidth() const { return m_Width; }
+    int GetHeight() const { return m_Height; }
     
     void ResizeBuffers(int width, int height);
 

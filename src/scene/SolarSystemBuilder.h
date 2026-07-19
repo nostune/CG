@@ -145,11 +145,6 @@ private:
             orbit.rotationPeriod = config.rotationPeriod;
             orbit.rotationAxis = { 0.0f, 1.0f, 0.0f };
             
-            // 获取 PhysX 引擎
-            auto& physxManager = PhysXManager::GetInstance();
-            auto* pxPhysics = physxManager.GetPhysics();
-            auto* pxScene = physxManager.GetScene();
-            
             // 太阳作为默认"太空"扇区
             auto& sector = registry.emplace<components::SectorComponent>(entity);
             sector.name = "Sun (Space)";
@@ -161,6 +156,12 @@ private:
             sector.priority = -100;  // 最低优先级，只有不在任何行星扇区时才使用
             sector.isActive = true;
             sector.rotatesWithBody = false;
+            auto& gravity = registry.emplace<components::GravitySourceComponent>(entity);
+            gravity.radius = config.radius;
+            gravity.surfaceGravity = config.surfaceGravity;
+            gravity.atmosphereHeight = sector.influenceRadius - config.radius;
+            gravity.isActive = true;
+            gravity.useRealisticGravity = true;
             
             // 太阳不需要碰撞体（不能着陆）
             sector.physxGround = nullptr;
@@ -269,7 +270,7 @@ private:
             sector.planetRadius = config.radius;
             // 扇区影响半径：星球半径的 3 倍，确保从远处接近时能检测到
             // 这个范围足够大，让玩家在接近星球时就能切换扇区
-            sector.influenceRadius = config.radius * 3.0f;
+            sector.influenceRadius = std::clamp(config.radius * 6.0f, config.radius * 3.0f, 600.0f);
             sector.priority = 0;  // 普通行星优先级为0
             sector.isActive = true;
             
@@ -278,9 +279,9 @@ private:
             gravity.radius = config.radius;
             gravity.surfaceGravity = config.surfaceGravity;
             // 重力影响范围也要足够大
-            gravity.atmosphereHeight = config.radius * 2.0f;
+            gravity.atmosphereHeight = sector.influenceRadius - config.radius;
             gravity.isActive = true;
-            gravity.useRealisticGravity = false;
+            gravity.useRealisticGravity = true;
             
             // 如果需要碰撞体
             // 【重要】PhysX 碰撞体必须在扇区原点 (0,0,0)！
@@ -384,7 +385,7 @@ private:
         sector.worldRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
         sector.planetRadius = config.radius;
         // 月球扇区影响半径：半径的2.5倍
-        sector.influenceRadius = config.radius * 2.5f;
+        sector.influenceRadius = config.radius * 5.0f;
         // 【关键】月球优先级比地球高！这样在月球附近时会优先进入月球扇区
         sector.priority = 10;
         sector.parentSector = parentPlanet;
@@ -395,9 +396,9 @@ private:
         auto& gravity = registry.emplace<components::GravitySourceComponent>(entity);
         gravity.radius = config.radius;
         gravity.surfaceGravity = MOON_SURFACE_GRAVITY;
-        gravity.atmosphereHeight = config.radius * 0.5f;  // 月球重力影响范围
+        gravity.atmosphereHeight = sector.influenceRadius - config.radius;
         gravity.isActive = true;
-        gravity.useRealisticGravity = false;
+        gravity.useRealisticGravity = true;
         
         // 创建 PhysX 碰撞体
         if (pxPhysics && pxScene) {

@@ -6,8 +6,10 @@
 #include "../core/DebugManager.h"
 #include "../core/Engine.h"
 #include "../ui/UISystem.h"
+#include "../gameplay/components/SolarMapState.h"
 #include <DirectXMath.h>
 #include <d3d11.h>
+#include <algorithm>
 #include <iostream>
 
 namespace outer_wilds {
@@ -73,14 +75,18 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
     context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
 
     // Set viewport
+    const float viewportWidth = static_cast<float>((std::max)(m_Backend->GetWidth(), 1));
+    const float viewportHeight = static_cast<float>((std::max)(m_Backend->GetHeight(), 1));
     D3D11_VIEWPORT viewport = {};
     viewport.TopLeftX = 0.0f;
     viewport.TopLeftY = 0.0f;
-    viewport.Width = 1280.0f;
-    viewport.Height = 720.0f;
+    viewport.Width = viewportWidth;
+    viewport.Height = viewportHeight;
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
     context->RSSetViewports(1, &viewport);
+    DebugManager::GetInstance().SetMetric("Render viewport width", viewportWidth, "px");
+    DebugManager::GetInstance().SetMetric("Render viewport height", viewportHeight, "px");
 
     // Clear render targets (深空黑色背景)
     float clearColor[4] = { 0.01f, 0.01f, 0.02f, 1.0f }; // 深空背景
@@ -116,6 +122,7 @@ void RenderSystem::RenderScene(components::CameraComponent* camera, entt::regist
     DirectX::XMVECTOR upDir = DirectX::XMLoadFloat3(&camera->up);
 
     DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eyePos, lookAt, upDir);
+    camera->aspectRatio = viewportWidth / viewportHeight;
     DirectX::XMMATRIX projection = DirectX::XMMatrixPerspectiveFovLH(
         camera->fov * DirectX::XM_PI / 180.0f,
         camera->aspectRatio,
@@ -245,6 +252,14 @@ DirectX::XMFLOAT3 RenderSystem::GetSunPosition(entt::registry& registry) {
 }
 
 components::CameraComponent* RenderSystem::FindActiveCamera(entt::registry& registry) {
+    if (const auto* mapView = registry.ctx().find<components::SolarMapViewState>();
+        mapView && mapView->cameraOverrideActive && mapView->cameraEntity != entt::null &&
+        registry.valid(mapView->cameraEntity)) {
+        if (auto* mapCamera = registry.try_get<components::CameraComponent>(mapView->cameraEntity)) {
+            return mapCamera;
+        }
+    }
+
     components::CameraComponent* activeCamera = nullptr;
 
     // Find any entity with an active CameraComponent

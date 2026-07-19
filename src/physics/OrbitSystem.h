@@ -34,15 +34,6 @@ private:
     // 计算自转
     void UpdateRotations(float deltaTime, entt::registry& registry);
     
-    // 计算轨道上的位置
-    DirectX::XMFLOAT3 CalculateOrbitPosition(
-        const DirectX::XMFLOAT3& center,
-        float radius,
-        float angle,
-        const DirectX::XMFLOAT3& normal,
-        float inclination
-    );
-
     std::shared_ptr<Scene> m_Scene;
 };
 

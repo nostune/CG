@@ -26,7 +26,7 @@ if (Test-Path -LiteralPath $logDirectory) {
 
 Push-Location $projectRoot
 try {
-    & $executable --landing-smoke *> $null
+    & $executable --orbit-smoke *> $null
     $exitCode = $LASTEXITCODE
 }
 finally {
@@ -34,7 +34,7 @@ finally {
 }
 
 if ($exitCode -ne 0) {
-    throw "Landing smoke executable exited with code $exitCode."
+    throw "Orbit smoke executable exited with code $exitCode."
 }
 
 $sessionLog = Get-ChildItem -LiteralPath $logDirectory -Filter "OuterWilds-*.log" -File |
@@ -42,16 +42,15 @@ $sessionLog = Get-ChildItem -LiteralPath $logDirectory -Filter "OuterWilds-*.log
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 if (-not $sessionLog) {
-    throw "Landing smoke run did not create a new session log."
+    throw "Orbit smoke run did not create a new session log."
 }
 
 $logLines = Get-Content -LiteralPath $sessionLog.FullName
 $requiredPatterns = @(
-    "Automated high-speed landing smoke mode enabled",
-    "Prepared 25 m/s radial Earth impact",
-    "[PhysXContact] Spacecraft <-> Earth",
-    "Contact stabilized; landing assist engaged",
-    "Spacecraft settled and entered sleep",
+    "Automated circular orbit smoke mode enabled",
+    "Prepared Earth circularization assist",
+    "flight.establish_orbit -> active",
+    "flight.establish_orbit -> completed",
     "Program exiting normally"
 )
 
@@ -63,17 +62,13 @@ $missingPatterns = @(
     }
 )
 if ($missingPatterns.Count -gt 0) {
-    throw "Landing smoke log is missing:`n  $($missingPatterns -join "`n  ")`nLog: $($sessionLog.FullName)"
+    throw "Orbit smoke log is missing:`n  $($missingPatterns -join "`n  ")`nLog: $($sessionLog.FullName)"
 }
 
 $fatalLines = @($logLines | Select-String -Pattern "\[(ERROR|CRITICAL)\]")
 if ($fatalLines.Count -gt 0) {
-    throw "Landing smoke recorded errors:`n  $($fatalLines.Line -join "`n  ")"
+    throw "Orbit smoke recorded errors:`n  $($fatalLines.Line -join "`n  ")"
 }
 
-$contactLine = $logLines | Select-String -SimpleMatch "[PhysXContact]" | Select-Object -First 1
-$settleLine = $logLines | Select-String -SimpleMatch "Spacecraft settled" | Select-Object -First 1
-Write-Host "High-speed landing smoke test passed." -ForegroundColor Green
+Write-Host "Circular orbit smoke test passed." -ForegroundColor Green
 Write-Host "  Log: $($sessionLog.FullName)"
-Write-Host "  $($contactLine.Line)"
-Write-Host "  $($settleLine.Line)"

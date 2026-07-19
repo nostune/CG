@@ -43,13 +43,20 @@ void SpacecraftDrivingSystem::Initialize(std::shared_ptr<Scene> scene) {
 }
 
 void SpacecraftDrivingSystem::Update(float deltaTime, entt::registry& registry) {
+    (void)deltaTime;
     ProcessSpacecraftInput(registry);
-    ApplySpacecraftForces(deltaTime, registry);
-    ApplyLandingAssist(deltaTime, registry);
+}
+
+void SpacecraftDrivingSystem::PrePhysicsUpdate(float fixedDeltaTime, entt::registry& registry) {
+    ApplySpacecraftForces(fixedDeltaTime, registry);
+    ApplyLandingAssist(fixedDeltaTime, registry);
+}
+
+void SpacecraftDrivingSystem::PostPhysicsStep(entt::registry& registry) {
+    UpdateSpacecraftState(registry);
 }
 
 void SpacecraftDrivingSystem::PostPhysicsUpdate(float deltaTime, entt::registry& registry) {
-    UpdateSpacecraftState(registry);
     UpdateSpacecraftCamera(deltaTime, registry);
 }
 
@@ -294,12 +301,15 @@ void SpacecraftDrivingSystem::ApplyLandingAssist(float deltaTime, entt::registry
         if (normal.magnitudeSquared() < 0.25f) continue;
         normal.normalize();
 
-        const physx::PxVec3 outward(
+        physx::PxVec3 outward(
             -gravity.currentGravityDir.x,
             -gravity.currentGravityDir.y,
             -gravity.currentGravityDir.z);
-        if (outward.magnitudeSquared() > 0.25f && normal.dot(outward) < 0.0f) {
-            normal = -normal;
+        if (outward.magnitudeSquared() > 0.25f) {
+            outward.normalize();
+            // A spherical body's radial up is stable; a single hull contact
+            // normal moves as the craft rolls and makes the controller chase it.
+            normal = outward;
         }
 
         const physx::PxVec3 velocity = actor->getLinearVelocity();
@@ -310,6 +320,14 @@ void SpacecraftDrivingSystem::ApplyLandingAssist(float deltaTime, entt::registry
         auto& diagnostics = DebugManager::GetInstance();
         diagnostics.SetMetric("Landing contact time", spacecraft.landingContactTime, "s");
         diagnostics.SetMetric("Landing contact speed", speed, "m/s");
+        diagnostics.SetMetric("Landing angular speed", angularSpeed, "rad/s");
+        if (spacecraft.landingContactTime >= 2.0f &&
+            spacecraft.landingContactTime - deltaTime < 2.0f) {
+            diagnostics.Info(
+                "LandingAssist",
+                "Two-second settle sample: speed=" + std::to_string(speed) +
+                " m/s, angular=" + std::to_string(angularSpeed) + " rad/s");
+        }
 
         if (speed > spacecraft.landingAssistMaxSpeed) {
             spacecraft.landingAssistActive = false;
@@ -342,17 +360,18 @@ void SpacecraftDrivingSystem::ApplyLandingAssist(float deltaTime, entt::registry
 
         if (!rotationInput) {
             const physx::PxVec3 shipUp = actor->getGlobalPose().q.rotate(physx::PxVec3(0.0f, 1.0f, 0.0f));
-            physx::PxVec3 angularAcceleration = shipUp.cross(normal) * 8.0f - angularVelocity * 4.0f;
+            physx::PxVec3 angularAcceleration = shipUp.cross(normal) * 16.0f - angularVelocity * 8.0f;
             const float accelerationMagnitude = angularAcceleration.magnitude();
-            if (accelerationMagnitude > 10.0f) {
-                angularAcceleration *= 10.0f / accelerationMagnitude;
+            if (accelerationMagnitude > 20.0f) {
+                angularAcceleration *= 20.0f / accelerationMagnitude;
             }
             actor->addTorque(angularAcceleration, physx::PxForceMode::eACCELERATION);
         }
 
         if (!translationInput && !rotationInput &&
             spacecraft.landingContactTime >= spacecraft.landingSettleTime &&
-            speed < 0.08f && angularSpeed < 0.05f) {
+            speed < spacecraft.landingSettleLinearSpeed &&
+            angularSpeed < spacecraft.landingSettleAngularSpeed) {
             actor->putToSleep();
             spacecraft.landingAssistActive = false;
             if (!spacecraft.landingSettledLogged) {

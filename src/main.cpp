@@ -12,6 +12,7 @@
 #include "core/DebugManager.h"
 #include "core/ProjectPaths.h"
 #include "core/TimeManager.h"
+#include "input/InputManager.h"
 #include "audio/AudioSystem.h"
 #include "ui/UISystem.h"
 #include "scene/Scene.h"
@@ -34,6 +35,8 @@
 #include "gameplay/components/PlayerComponent.h"
 #include "gameplay/components/CharacterControllerComponent.h"
 #include "gameplay/components/SpacecraftComponent.h"
+#include "gameplay/components/NavigationTargetState.h"
+#include "gameplay/components/OrbitNavigationComponent.h"
 
 // 物理组件
 #include "physics/components/GravitySourceComponent.h"
@@ -56,6 +59,7 @@
 #include <sstream>
 #include <DbgHelp.h>
 #include <algorithm>
+#include <cmath>
 
 #pragma comment(lib, "DbgHelp.lib")
 
@@ -106,6 +110,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         return true;
     
     switch (uMsg) {
+        case WM_SIZE:
+            if (wParam != SIZE_MINIMIZED) {
+                auto* renderSystem = outer_wilds::Engine::GetInstance().GetRenderSystem();
+                if (renderSystem && renderSystem->GetBackend()) {
+                    renderSystem->GetBackend()->ResizeBuffers(
+                        static_cast<int>(LOWORD(lParam)),
+                        static_cast<int>(HIWORD(lParam)));
+                }
+            }
+            return 0;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -150,12 +164,15 @@ int main(int argc, char* argv[]) {
     const bool saturnCollisionSmoke = HasCommandLineArgument(argc, argv, "--saturn-collision-smoke");
     const bool marsCollisionSmoke = HasCommandLineArgument(argc, argv, "--mars-collision-smoke");
     const bool landingSmoke = HasCommandLineArgument(argc, argv, "--landing-smoke");
+    const bool orbitSmoke = HasCommandLineArgument(argc, argv, "--orbit-smoke");
+    const bool mapCameraSmoke = HasCommandLineArgument(argc, argv, "--map-camera-smoke");
+    const bool velocityMatchSmoke = HasCommandLineArgument(argc, argv, "--velocity-match-smoke");
     const bool sectorSmoke = sectorTransitionSmoke || moonTransitionSmoke ||
         saturnCollisionSmoke || marsCollisionSmoke;
     const bool hiddenWindow = HasCommandLineArgument(argc, argv, "--hidden") ||
-        diagnosticsSmoke || sectorSmoke || landingSmoke;
+        diagnosticsSmoke || sectorSmoke || landingSmoke || orbitSmoke || mapCameraSmoke || velocityMatchSmoke;
     const bool skipWelcome = HasCommandLineArgument(argc, argv, "--skip-welcome") ||
-        diagnosticsSmoke || sectorSmoke || landingSmoke;
+        diagnosticsSmoke || sectorSmoke || landingSmoke || orbitSmoke || mapCameraSmoke || velocityMatchSmoke;
     if (diagnosticsSmoke || HasCommandLineArgument(argc, argv, "--physx-debug")) {
         SetEnvironmentVariableA("OUTERWILDS_PHYSX_DEBUG_VIEW", "1");
     }
@@ -208,6 +225,15 @@ int main(int argc, char* argv[]) {
     if (landingSmoke) {
         engine.SetAutoStopAfterSeconds(8.0f);
         diagnostics.Info("LandingTest", "Automated high-speed landing smoke mode enabled");
+    } else if (orbitSmoke) {
+        engine.SetAutoStopAfterSeconds(32.0f);
+        diagnostics.Info("OrbitTest", "Automated circular orbit smoke mode enabled");
+    } else if (mapCameraSmoke) {
+        engine.SetAutoStopAfterSeconds(3.0f);
+        diagnostics.Info("SolarMapCamera", "Automated map camera smoke mode enabled");
+    } else if (velocityMatchSmoke) {
+        engine.SetAutoStopAfterSeconds(4.0f);
+        diagnostics.Info("VelocityMatch", "Automated velocity-match smoke mode enabled");
     } else if (diagnosticsSmoke) {
         engine.SetAutoStopAfterSeconds(3.0f);
         diagnostics.Info("Diagnostics", "Automated smoke mode enabled");
@@ -219,6 +245,9 @@ int main(int argc, char* argv[]) {
     if (engine.Initialize(hwnd, WINDOW_WIDTH, WINDOW_HEIGHT)) {
         outer_wilds::DebugManager::GetInstance().Log("Main", "Engine initialized successfully");
         outer_wilds::DebugManager::GetInstance().SetShowFPS(true);
+        if (diagnosticsSmoke || sectorSmoke || landingSmoke || orbitSmoke || mapCameraSmoke || velocityMatchSmoke) {
+            outer_wilds::InputManager::GetInstance().SetMouseLookEnabled(false);
+        }
         
         auto scene = engine.GetSceneManager()->GetActiveScene();
         auto& physxManager = outer_wilds::PhysXManager::GetInstance();
@@ -551,7 +580,9 @@ int main(int argc, char* argv[]) {
             spacecraftActor->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
             spacecraftActor->setMaxDepenetrationVelocity(20.0f);
             // 【物理参数】适当的阻尼，既能在太空保持漂移，又能在接触地面时快速稳定
-            spacecraftActor->setLinearDamping(0.2f);   // 轻微线性阻尼，减少地面碰撞后的滑动颤抖
+            // LandingAssist owns ground stabilization. Persistent damping in
+            // flight destroys orbital velocity, so free flight is drag-free.
+            spacecraftActor->setLinearDamping(0.0f);
             spacecraftActor->setAngularDamping(2.0f);  // 提高角阻尼，抑制旋转抖动
             spacecraftActor->setMaxLinearVelocity(500.0f);  // 更高最大速度
             spacecraftActor->setMaxAngularVelocity(3.0f);   // 限制最大角速度（防止旋转太快）
@@ -565,18 +596,56 @@ int main(int argc, char* argv[]) {
             rigidBody.physxActor = spacecraftActor;
 
             if (landingSmoke) {
-                const DirectX::XMFLOAT3 testPosition = {0.0f, PLANET_RADIUS + 18.0f, 0.0f};
-                const DirectX::XMFLOAT4 testRotation = {0.0f, 0.0f, 0.0f, 1.0f};
+                const DirectX::XMFLOAT3 testPosition = {PLANET_RADIUS + 18.0f, 0.0f, 0.0f};
+                const physx::PxQuat testPoseRotation(
+                    -physx::PxHalfPi, physx::PxVec3(0.0f, 0.0f, 1.0f));
+                const DirectX::XMFLOAT4 testRotation = {
+                    testPoseRotation.x, testPoseRotation.y, testPoseRotation.z, testPoseRotation.w};
                 spacecraftActor->setGlobalPose(physx::PxTransform(
                     physx::PxVec3(testPosition.x, testPosition.y, testPosition.z),
-                    physx::PxQuat(physx::PxIdentity)));
-                spacecraftActor->setLinearVelocity(physx::PxVec3(0.0f, -25.0f, 0.0f));
+                    testPoseRotation));
+                spacecraftActor->setLinearVelocity(physx::PxVec3(-25.0f, 0.0f, 0.0f));
                 spacecraftActor->setAngularVelocity(physx::PxVec3(0.0f));
                 inSector.sector = planetEntity;
                 inSector.localPosition = testPosition;
                 inSector.localRotation = testRotation;
                 spacecraft.currentState = outer_wilds::components::SpacecraftComponent::State::PILOTED;
                 diagnostics.Info("LandingTest", "Prepared 25 m/s radial Earth impact");
+            } else if (orbitSmoke) {
+                const float orbitRadius = PLANET_RADIUS * 1.4f;
+                const float gravitationalParameter = SURFACE_GRAVITY * PLANET_RADIUS * PLANET_RADIUS;
+                const float circularSpeed = std::sqrt(gravitationalParameter / orbitRadius);
+                const DirectX::XMFLOAT3 testPosition = {orbitRadius, 0.0f, 0.0f};
+                spacecraftActor->setGlobalPose(physx::PxTransform(
+                    physx::PxVec3(testPosition.x, testPosition.y, testPosition.z),
+                    physx::PxQuat(physx::PxIdentity)));
+                spacecraftActor->setLinearVelocity(physx::PxVec3(4.0f, 0.0f, circularSpeed * 0.6f));
+                spacecraftActor->setAngularVelocity(physx::PxVec3(0.0f));
+                inSector.sector = planetEntity;
+                inSector.localPosition = testPosition;
+                inSector.localRotation = {0.0f, 0.0f, 0.0f, 1.0f};
+                spacecraft.currentState = outer_wilds::components::SpacecraftComponent::State::PILOTED;
+                auto& orbitNavigation = scene->GetRegistry().get_or_emplace<
+                    outer_wilds::components::OrbitNavigationComponent>(spacecraftEntity);
+                orbitNavigation.automatedCircularizeRequest = true;
+                diagnostics.Info(
+                    "OrbitTest",
+                    "Prepared Earth circularization assist at " + std::to_string(orbitRadius) +
+                    " m toward " + std::to_string(circularSpeed) + " m/s");
+            } else if (velocityMatchSmoke) {
+                const DirectX::XMFLOAT3 testPosition = {PLANET_RADIUS * 2.0f, 0.0f, 0.0f};
+                spacecraftActor->setGlobalPose(physx::PxTransform(
+                    physx::PxVec3(testPosition.x, testPosition.y, testPosition.z),
+                    physx::PxQuat(physx::PxIdentity)));
+                spacecraftActor->setLinearVelocity(physx::PxVec3(0.0f, 0.0f, 20.0f));
+                inSector.sector = planetEntity;
+                inSector.localPosition = testPosition;
+                spacecraft.currentState = outer_wilds::components::SpacecraftComponent::State::PILOTED;
+                auto& targetState = scene->GetRegistry().ctx().emplace<
+                    outer_wilds::components::NavigationTargetState>();
+                targetState.lockedTarget = planetEntity;
+                targetState.automatedMatchRequest = true;
+                diagnostics.Info("VelocityMatch", "Prepared 20 m/s Earth-relative velocity offset");
             } else if (sectorSmoke) {
                 entt::entity startingSectorEntity = planetEntity;
                 DirectX::XMFLOAT3 testPosition = {};
@@ -646,6 +715,11 @@ int main(int argc, char* argv[]) {
             if (auto uiSystem = engine.GetUISystem()) {
                 uiSystem->ShowWelcomeScreenWithKeyWait(
                     outer_wilds::ProjectPaths::Asset("ui/kkstudio1.jpg").string());
+            }
+        }
+        if (mapCameraSmoke) {
+            if (auto uiSystem = engine.GetUISystem()) {
+                uiSystem->SetNavigationMapVisible(true);
             }
         }
         

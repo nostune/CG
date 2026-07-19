@@ -3,6 +3,8 @@
 #include <d3d11.h>
 #include <string>
 #include <memory>
+#include <vector>
+#include <DirectXMath.h>
 
 namespace outer_wilds {
 
@@ -41,8 +43,71 @@ public:
 
     void SetDiagnosticsVisible(bool visible) { m_ShowDiagnostics = visible; }
     bool IsDiagnosticsVisible() const { return m_ShowDiagnostics; }
+    void SetNavigationMapVisible(bool visible) { m_ShowNavigationMap = visible; }
+    bool IsNavigationMapVisible() const { return m_ShowNavigationMap; }
 
 private:
+    struct ObjectiveHudSnapshot {
+        bool visible = false;
+        std::string title;
+        std::string description;
+        float progress = 0.0f;
+        float requiredProgress = 1.0f;
+    };
+
+    struct NavigationSnapshot {
+        struct Body {
+            entt::entity entity = entt::null;
+            std::string name;
+            DirectX::XMFLOAT3 position = {0.0f, 0.0f, 0.0f};
+            float radius = 1.0f;
+            bool currentSector = false;
+        };
+
+        struct Path {
+            std::vector<DirectX::XMFLOAT3> points;
+            bool dashed = false;
+        };
+
+        bool available = false;
+        std::string bodyName;
+        std::string trajectoryStatus;
+        float bodyRadius = 0.0f;
+        float altitude = 0.0f;
+        float speed = 0.0f;
+        float radialSpeed = 0.0f;
+        float tangentialSpeed = 0.0f;
+        float circularOrbitSpeed = 0.0f;
+        bool circularizeActive = false;
+        float periapsisAltitude = 0.0f;
+        float apoapsisAltitude = 0.0f;
+        std::vector<Body> bodies;
+        std::vector<Path> bodyOrbits;
+        Path predictedWorldTrajectory;
+        DirectX::XMFLOAT3 spacecraftWorldPosition = {0.0f, 0.0f, 0.0f};
+        bool hasSpacecraftWorldPosition = false;
+        DirectX::XMFLOAT4X4 viewProjection = {};
+        bool hasMapCamera = false;
+        float cameraTransition = 0.0f;
+        entt::entity lockedTarget = entt::null;
+    };
+
+    struct NavigationTargetSnapshot {
+        bool hasCandidate = false;
+        bool hasLockedTarget = false;
+        bool matchingVelocity = false;
+        DirectX::XMFLOAT3 candidateWorldPosition = {0.0f, 0.0f, 0.0f};
+        DirectX::XMFLOAT3 targetWorldPosition = {0.0f, 0.0f, 0.0f};
+        DirectX::XMFLOAT4X4 viewProjection = {};
+        std::string targetName;
+        float distance = 0.0f;
+        float relativeSpeed = 0.0f;
+    };
+
+    void UpdateGameplaySnapshot(entt::registry& registry);
+    void RenderObjectiveHud();
+    void RenderNavigationMap();
+    void RenderNavigationTargetHud();
     void RenderWelcomeScreen();
     void RenderDiagnosticsPanel();
     void RenderDiagnosticsOverview();
@@ -75,6 +140,19 @@ private:
     std::string m_ImGuiIniPath;
     std::unique_ptr<PhysXDebugRenderer> m_PhysXDebugRenderer;
     bool m_ShowPhysXSpace = false;
+    ObjectiveHudSnapshot m_ObjectiveHud;
+    NavigationSnapshot m_Navigation;
+    NavigationTargetSnapshot m_NavigationTarget;
+    bool m_ShowNavigationMap = false;
+    bool m_MouseLookBeforeMap = true;
+    float m_MapYaw = -0.55f;
+    float m_MapPitch = 0.65f;
+    float m_MapZoom = 1.0f;
+    DirectX::XMFLOAT2 m_MapPan = {0.0f, 0.0f};
+    bool m_MapCenteredOnSpacecraft = false;
+    entt::entity m_SelectedMapBody = entt::null;
+    entt::entity m_FocusedMapBody = entt::null;
+    entt::entity m_PendingMapLockTarget = entt::null;
 };
 
 } // namespace outer_wilds

@@ -8,6 +8,15 @@
 namespace outer_wilds {
 
 bool RenderBackend::Initialize(void* hwnd, int width, int height) {
+    RECT clientRect = {};
+    if (GetClientRect(static_cast<HWND>(hwnd), &clientRect)) {
+        const int clientWidth = clientRect.right - clientRect.left;
+        const int clientHeight = clientRect.bottom - clientRect.top;
+        if (clientWidth > 0 && clientHeight > 0) {
+            width = clientWidth;
+            height = clientHeight;
+        }
+    }
     m_Width = width;
     m_Height = height;
 
@@ -169,21 +178,23 @@ void RenderBackend::Present() {
 }
 
 void RenderBackend::ResizeBuffers(int width, int height) {
+    if (width <= 0 || height <= 0 || !m_SwapChain) return;
     if (width == m_Width && height == m_Height) return;
 
-    m_Width = width;
-    m_Height = height;
-
-    // Release render target view
+    // The immediate context owns references to the current back buffer while
+    // it is bound. Unbind it before ResizeBuffers or DXGI may reject the resize.
+    m_Context->OMSetRenderTargets(0, nullptr, nullptr);
     m_RenderTargetView.Reset();
     m_DepthStencilView.Reset();
 
     // Resize swap chain
     HRESULT hr = m_SwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
     if (FAILED(hr)) {
-        std::cerr << "Failed to resize swap chain buffers" << std::endl;
+        DebugManager::GetInstance().Error("RenderBackend", "Failed to resize swap chain buffers");
         return;
     }
+    m_Width = width;
+    m_Height = height;
 
     // Recreate render target view
     ComPtr<ID3D11Texture2D> backBuffer;
